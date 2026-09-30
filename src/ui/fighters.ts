@@ -390,13 +390,38 @@ export type PlanStep =
   | { readonly kind: 'ko'; readonly at: number; readonly side: Side }
   | { readonly kind: 'dash'; readonly at: number; readonly side: Side }
 
-export const TIMELINE = { windupAt: 0, lungeAt: 300, impactAt: 450, endAt: 700, totalMs: 1250 } as const
+export interface Timeline {
+  readonly windupAt: number
+  readonly lungeAt: number
+  readonly impactAt: number
+  readonly endAt: number
+  readonly totalMs: number
+}
 
-export function planExchange(ex: ExchangeRecord, end: FightStatus): PlanStep[] {
-  const steps: PlanStep[] = [{ kind: 'windup', at: TIMELINE.windupAt, sides: ['player', 'enemy'] }]
+export const TIMELINE: Timeline = { windupAt: 0, lungeAt: 300, impactAt: 450, endAt: 700, totalMs: 1250 }
+
+export const FAST_TOTAL_MS = 450
+
+export function scaleTimeline(base: Timeline, totalMs: number): Timeline {
+  const k = totalMs / base.totalMs
+  return {
+    windupAt: Math.round(base.windupAt * k),
+    lungeAt: Math.round(base.lungeAt * k),
+    impactAt: Math.round(base.impactAt * k),
+    endAt: Math.round(base.endAt * k),
+    totalMs,
+  }
+}
+
+export function timelineFor(fast: boolean): Timeline {
+  return fast ? scaleTimeline(TIMELINE, FAST_TOTAL_MS) : TIMELINE
+}
+
+export function planExchange(ex: ExchangeRecord, end: FightStatus, timeline: Timeline = TIMELINE): PlanStep[] {
+  const steps: PlanStep[] = [{ kind: 'windup', at: timeline.windupAt, sides: ['player', 'enemy'] }]
   const tie = ex.winner === 'tie'
   const lunger: Side[] = tie ? ['player', 'enemy'] : ex.winner === 'player' ? ['player'] : ['enemy']
-  steps.push({ kind: 'lunge', at: TIMELINE.lungeAt, sides: lunger, bounce: tie })
+  steps.push({ kind: 'lunge', at: timeline.lungeAt, sides: lunger, bounce: tie })
   const floats: FloatSpec[] = []
   const hit: Side[] = []
   const block: Side[] = []
@@ -420,10 +445,10 @@ export function planExchange(ex: ExchangeRecord, end: FightStatus): PlanStep[] {
   if (escaped) floats.push({ target: 'player', text: 'Escaped!', sub: null, tone: 'block' })
   if (tie) floats.unshift({ target: 'center', text: 'Tie', sub: null, tone: 'info' })
   const crit = ex.playerCritFactor > 1 || ex.enemyCritFactor > 1
-  steps.push({ kind: 'impact', at: TIMELINE.impactAt, hit, block, crit, shake: crit, floats })
-  if (escaped) steps.push({ kind: 'dash', at: TIMELINE.endAt, side: 'player' })
-  else if (end === 'won') steps.push({ kind: 'ko', at: TIMELINE.endAt, side: 'enemy' })
-  else if (end === 'lost') steps.push({ kind: 'ko', at: TIMELINE.endAt, side: 'player' })
+  steps.push({ kind: 'impact', at: timeline.impactAt, hit, block, crit, shake: crit, floats })
+  if (escaped) steps.push({ kind: 'dash', at: timeline.endAt, side: 'player' })
+  else if (end === 'won') steps.push({ kind: 'ko', at: timeline.endAt, side: 'enemy' })
+  else if (end === 'lost') steps.push({ kind: 'ko', at: timeline.endAt, side: 'player' })
   return steps
 }
 

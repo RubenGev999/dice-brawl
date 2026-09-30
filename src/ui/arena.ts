@@ -1,6 +1,7 @@
 import type { EnemyTraitId } from '../core/index.ts'
 import { characterFor, characterSvg, HERO } from './fighters.ts'
 import type { FloatSpec, PlanStep, RollChip, Side } from './fighters.ts'
+import type { TagTone } from './effects.ts'
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
   const node = document.createElement(tag)
@@ -39,6 +40,8 @@ export interface Stage {
   setRoll(side: Side, chip: RollChip, tone: RollTone): void
   hideRolls(): void
   setEnraged(on: boolean): void
+  tag(side: Side, text: string, tone: TagTone): void
+  destroy(): void
 }
 
 function makeBar(cls: string): Bar {
@@ -76,6 +79,7 @@ const MOTION_CLASSES = ['fx-windup', 'fx-lunge', 'fx-bounce', 'fx-ko', 'fx-dash'
 export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTraitId): Stage {
   const root = el('div', 'stage')
   const money = el('div', 'stage-money')
+  money.setAttribute('data-tut', 'money')
   const mult = el('div', 'mult', 'x0.00')
   const ko = el('div', 'ko')
   money.append(mult, ko)
@@ -87,6 +91,15 @@ export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTrai
 
   let steps: ReadonlyArray<PlanStep> = []
   let applied = 0
+  const timers = new Set<number>()
+
+  function later(fn: () => void, ms: number): void {
+    const id = window.setTimeout(() => {
+      timers.delete(id)
+      fn()
+    }, ms)
+    timers.add(id)
+  }
 
   function spawn(spec: FloatSpec, slot: number): void {
     const host = spec.target === 'center' ? root : sides[spec.target].host
@@ -97,7 +110,7 @@ export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTrai
     host.append(node)
     const remove = (): void => node.remove()
     node.addEventListener('animationend', remove)
-    window.setTimeout(remove, 1800)
+    later(remove, 1800)
   }
 
   function apply(step: PlanStep): void {
@@ -197,6 +210,21 @@ export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTrai
     hideRolls,
     setEnraged(on) {
       sides.enemy.col.classList.toggle('enraged', on)
+    },
+    tag(side, text, tone) {
+      const host = sides[side].host
+      const slot = host.querySelectorAll('.utag').length
+      const t = el('div', `utag utag-${tone}`, text)
+      t.style.setProperty('--slot', String(slot))
+      host.append(t)
+      const remove = (): void => t.remove()
+      t.addEventListener('animationend', remove)
+      later(remove, 2600)
+    },
+    destroy() {
+      for (const id of timers) window.clearTimeout(id)
+      timers.clear()
+      for (const s of ['player', 'enemy'] as const) sides[s].host.querySelectorAll('.utag, .float').forEach((n) => n.remove())
     },
   }
 }

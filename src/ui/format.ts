@@ -58,12 +58,13 @@ export function chipLabel(g: UpgradeGroup): string {
 }
 
 export interface ChipModel {
+  readonly id: string
   readonly label: string
   readonly title: string
 }
 
 export function chipModels(upgrades: ReadonlyArray<Upgrade>): ChipModel[] {
-  return groupUpgrades(upgrades).map((g) => ({ label: chipLabel(g), title: g.description }))
+  return groupUpgrades(upgrades).map((g) => ({ id: g.id, label: chipLabel(g), title: g.description }))
 }
 
 export function chipSignature(chips: ReadonlyArray<ChipModel>): string {
