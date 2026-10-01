@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { CONFIG, createGame } from '../../core/index.ts'
+import { CONFIG, createGame, levelInfo } from '../../core/index.ts'
 import type { CheckpointResult, ExchangeRecord, Game, GameState, ShopOffer, Upgrade } from '../../core/index.ts'
+import { exchange } from './fixtures.ts'
 import {
   buyInChoices,
   chargesText,
@@ -19,7 +20,6 @@ import {
   exchangeTone,
   feeWarning,
   fightLabel,
-  fightMessage,
   fightPips,
   fightTitle,
   formatCoins,
@@ -32,56 +32,48 @@ import {
   hudView,
   leaveFreeLine,
   leaveLabel,
+  levelFullProfileLine,
+  levelProfileLine,
+  levelTitle,
+  levelsBlurb,
   lobbyState,
+  maxWinLine,
+  nextLevelTitle,
   nextTargetLine,
   offerOwnedText,
   outcomeTone,
   parseSeed,
-  pawnModel,
   pickBuyIn,
   pipCells,
   returnRows,
   runStatRows,
-  shopNote,
   skipLabel,
   stageNotice,
   targetLine,
   targetMet,
   visiblePresets,
+  walkAwayPercents,
+  walkAwayRows,
   walletLine,
 } from '../format.ts'
 
 function ex(over: Partial<ExchangeRecord>): ExchangeRecord {
-  return {
-    index: 0,
+  return exchange({
     playerFaces: [3, 4],
-    playerFacesBeforeReroll: null,
-    rerolled: false,
     enemyFaces: [2, 3],
     playerTotal: 7,
     enemyTotal: 5,
-    winner: 'player',
-    playerCrit: false,
-    enemyCrit: false,
-    playerCritFactor: 1,
-    enemyCritFactor: 1,
     damageDealt: 2,
-    damageTaken: 0,
-    blocked: 0,
-    healed: 0,
-    enemyHealed: 0,
-    escaped: false,
-    playerHpAfter: 10,
     enemyHpAfter: 6,
     multiplierGained: 0,
     multiplierGainedMilli: 0,
     multiplierAfterMilli: 0,
     ...over,
-  }
+  })
 }
 
 function up(id: string, name: string): Upgrade {
-  return { id: id as Upgrade['id'], name, description: name + ' desc', maxCopies: 2, pawnValue: 10 }
+  return { id: id as Upgrade['id'], name, description: name + ' desc', maxCopies: 2 }
 }
 
 function preset(id: 'low' | 'medium' | 'high' | 'max', label: string, amount: number, isAllIn = false) {
@@ -163,7 +155,12 @@ describe('exchange outcome text', () => {
     expect(exchangeOutcome(ex({ enemyHealed: 1 }))).toBe('You hit for 2 | Enemy heals 1')
     expect(exchangeOutcome(ex({ winner: 'tie', damageDealt: 0 }))).toBe('Tie')
     expect(exchangeOutcome(ex({ winner: 'tie', damageDealt: 0, enemyHealed: 1 }))).toBe('Tie | Enemy heals 1')
-    expect(exchangeOutcome(ex({ winner: 'enemy', damageDealt: 0, escaped: true }))).toContain('Escape Rope')
+    expect(exchangeOutcome(ex({ winner: 'player', tieBreak: true, damageDealt: 2 }))).toBe('Tie Breaker hits for 2')
+    expect(exchangeOutcome(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 3 }))).toBe('Enemy hits for 3 | Riposte hits for 1')
+    expect(exchangeOutcome(ex({ thornDamage: 1 }))).toBe('You hit for 2 | Thorns hurt you for 1')
+    expect(exchangeOutcome(ex({ cursedClamps: 1 }))).toBe('You hit for 2 | Cursed: a 6 counts as 5')
+    expect(exchangeOutcome(ex({ cursedClamps: 2 }))).toContain('2 sixes count as 5')
+    expect(exchangeOutcome(ex({ playerCrit: true, playerCritFactor: 3, playerCritSource: 'combo', damageDealt: 9 }))).toBe('COMBO x3! You hit for 9')
   })
 })
 
@@ -172,13 +169,18 @@ describe('crit text, tones and charges', () => {
     expect(critText(ex({}))).toBeNull()
     expect(critText(ex({ playerCritFactor: 2 }))).toBe('CRIT x2')
     expect(critText(ex({ enemyCritFactor: 3 }))).toBe('CRIT x3')
+    expect(critText(ex({ playerCritFactor: 3, playerCritSource: 'combo' }))).toBe('COMBO x3')
+    expect(critText(ex({ playerCritFactor: 2, playerCritSource: 'firstBlood' }))).toBe('FIRST BLOOD x2')
+    expect(critText(ex({ playerCritFactor: 2, playerCritSource: 'loadedDice' }))).toBe('LOADED CRIT x2')
+    expect(critText(ex({ playerCritFactor: 2, playerCritSource: 'doubles' }))).toBe('CRIT x2')
   })
   it('tones exchanges', () => {
     expect(exchangeTone(ex({}))).toBe('good')
     expect(exchangeTone(ex({ winner: 'enemy', damageTaken: 3 }))).toBe('bad')
     expect(exchangeTone(ex({ winner: 'enemy', damageTaken: 0, blocked: 4 }))).toBe('neutral')
     expect(exchangeTone(ex({ winner: 'tie' }))).toBe('neutral')
-    expect(exchangeTone(ex({ winner: 'enemy', damageTaken: 5, escaped: true }))).toBe('good')
+    expect(exchangeTone(ex({ winner: 'player', tieBreak: true }))).toBe('good')
+    expect(exchangeTone(ex({ winner: 'enemy', damageTaken: 2, riposteDamage: 1, damageDealt: 1 }))).toBe('bad')
   })
   it('notes enrage changes', () => {
     expect(enrageNote(0, 1)).toBe('Enemy enraged: +1 to rolls')
@@ -187,8 +189,10 @@ describe('crit text, tones and charges', () => {
     expect(enemyTraitLine({ traitText: 'Enrage', bonus: 0, currentBonus: 1 })).toBe('Enrage (rolls +1 now)')
   })
   it('lists charges', () => {
-    expect(chargesText({ shieldsLeft: 0, rerollsLeft: 0, hasEscapeRope: false })).toBe('No charges')
-    expect(chargesText({ shieldsLeft: 2, rerollsLeft: 1, hasEscapeRope: true })).toBe('Shield x2 | Reroll x1 | Escape Rope ready')
+    expect(chargesText({ shieldsLeft: 0, rerollsLeft: 0 })).toBe('No charges')
+    expect(chargesText({ shieldsLeft: 2, rerollsLeft: 1 })).toBe('Shield x2 | Reroll x1')
+    expect(chargesText({ shieldsLeft: 0, rerollsLeft: 0, maxFace: 6 })).toBe('No charges')
+    expect(chargesText({ shieldsLeft: 1, rerollsLeft: 0, maxFace: 5 })).toBe('Shield x1 | Cursed: max face 5')
   })
 })
 
@@ -199,11 +203,8 @@ describe('screen text', () => {
     expect(fightTitle('lost')).toBe('Knocked out')
     expect(fightTitle('lost', true)).toBe('The boss wins')
     expect(fightTitle('walkedAway')).toBe('Walked away')
-    expect(fightTitle('escaped')).toBe('Escaped!')
-    expect(fightMessage('escaped')).toContain('Escape Rope')
-    expect(fightMessage('won')).toBeNull()
     expect(outcomeTone('lost')).toBe('bad')
-    expect(outcomeTone('escaped')).toBe('good')
+    expect(outcomeTone('walkedAway')).toBe('good')
   })
   it('explains each game over reason', () => {
     const cp: CheckpointResult = { stage: 1, entryBankroll: 100, target: 107, bankroll: 40, outcome: 'failed' }
@@ -215,6 +216,7 @@ describe('screen text', () => {
     expect(gameOverText('checkpoint', null, 9, 1, 10)).toContain('9')
     expect(gameOverText('broke', null, 0, 0, 10)).toContain('ran out of coins')
     expect(gameOverText('broke', null, 0, 0, 10)).toContain('No coins come back')
+    expect(gameOverText('broke', null, 0, 0, 10)).not.toContain('pawn')
     expect(gameOverText('left', null, 1234, 0, 10)).toContain('1,234')
     expect(gameOverText('left', null, 1234, 0, 10)).toContain('free')
     expect(gameOverText(null, null)).toBe('The run is over.')
@@ -229,22 +231,18 @@ describe('screen text', () => {
     expect(coinsText(1234)).toBe('1,234 coins')
     expect(leaveLabel(1)).toBe('Leave with 1 coin')
     expect(walletLine(1)).toBe('1 coin')
-    expect(skipLabel(1)).toBe('Skip (+1 coin)')
-    expect(shopNote({ bankroll: 0, skipCoins: 1 })).toContain('pays 1 coin so')
+    expect(skipLabel()).toBe('Skip')
     const cp: CheckpointResult = { stage: 1, entryBankroll: 100, target: 107, bankroll: 10, outcome: 'failed' }
     expect(gameOverText('checkpoint', cp, 9, 1, 10)).toContain('A 10% fee (1 coin) was withheld, so you get back 9 coins.')
     expect(gameOverText('checkpoint', cp, 1, 1, 10)).toContain('you get back 1 coin.')
     expect(gameOverText('checkpoint', cp, 1, 0, 10)).toContain('You get back 1 coin.')
     expect(gameOverText('left', null, 1, 0, 10)).toContain('took all 1 coin.')
-    const one = { ...up('shield', 'Shield'), pawnValue: 1 }
-    expect(pawnModel({ canPawn: true, canBet: false, upgrades: [one] })?.items[0]?.label).toBe('Pawn +1 coin')
   })
   it('explains a failed checkpoint by what happened in the boss fight', () => {
     const cp: CheckpointResult = { stage: 1, entryBankroll: 100, target: 107, bankroll: 104, outcome: 'failed' }
     expect(checkpointMissText(cp, { outcome: 'won', isBoss: true })).toBe('You beat the boss but finished with 104, below the target of 107.')
     expect(checkpointMissText(cp, { outcome: 'lost', isBoss: true })).toBe('The boss knocked you out and you finished with 104, below the target of 107.')
     expect(checkpointMissText(cp, { outcome: 'walkedAway', isBoss: true })).toBe('You walked away from the boss and finished with 104, below the target of 107.')
-    expect(checkpointMissText(cp, { outcome: 'escaped', isBoss: true })).toBe('You escaped the boss and finished with 104, below the target of 107.')
     expect(checkpointMissText(cp, null)).toBe('You finished with 104, below the target of 107.')
     expect(checkpointMissText(cp, { outcome: 'won', isBoss: false })).toBe('You finished with 104, below the target of 107.')
     expect(checkpointMissText(null, { outcome: 'won', isBoss: true })).toBe('The boss checkpoint was failed.')
@@ -257,7 +255,7 @@ describe('screen text', () => {
     const base = { entryBankroll: 100, target: 107, bankroll: 110 }
     expect(stageNotice({ lastCheckpoint: null, target: 85 })).toBeNull()
     expect(stageNotice({ lastCheckpoint: { ...base, stage: 1, outcome: 'failed' }, target: 85 })).toBeNull()
-    expect(stageNotice({ lastCheckpoint: { ...base, stage: 1, outcome: 'passed' }, target: 1097 })).toBe('Stage 1 cleared, new target 1,097')
+    expect(stageNotice({ lastCheckpoint: { ...base, stage: 1, outcome: 'passed' }, target: 1097 })).toBe('Level 1 cleared, new target 1,097')
   })
   it('writes one target line', () => {
     expect(targetLine({ target: 1070 })).toBe('Target 1,070 after the boss')
@@ -265,13 +263,13 @@ describe('screen text', () => {
     expect(targetMet({ bankroll: 106, target: 107 })).toBe(false)
   })
   it('writes checkpoint text', () => {
-    expect(checkpointHeadline({ stage: 2 })).toBe('Stage 2 cleared')
+    expect(checkpointHeadline({ stage: 2 })).toBe('Level 2 cleared')
     expect(checkpointNet(130, 100)).toBe('+30 vs your buy-in of 100')
     expect(checkpointNet(80, 100)).toBe('-20 vs your buy-in of 100')
     expect(leaveLabel(1234)).toBe('Leave with 1,234 coins')
-    expect(continueLabel(3)).toBe('Continue to stage 3')
+    expect(continueLabel(3)).toBe('Continue to level 3')
     expect(nextTargetLine({ stage: 3, target: 500 })).toContain('500')
-    expect(nextTargetLine({ stage: 3, target: 500 })).toContain('stage 3')
+    expect(nextTargetLine({ stage: 3, target: 500 })).toContain('level 3')
   })
   it('labels fights and pips', () => {
     expect(fightLabel({ fightNumberInStage: 2, fightsPerStage: 5, isBossFight: false })).toBe('Fight 2 of 5')
@@ -283,7 +281,6 @@ describe('screen text', () => {
   it('shop and wallet text', () => {
     expect(offerOwnedText({ owned: 0, maxCopies: 3 })).toBeNull()
     expect(offerOwnedText({ owned: 2, maxCopies: 3 })).toBe('Owned 2 / 3')
-    expect(skipLabel(10)).toBe('Skip (+10 coins)')
     expect(walletLine(1500)).toBe('1,500 coins')
   })
   it('chooses buy-ins by wallet', () => {
@@ -365,7 +362,7 @@ function findCheckpointGame(): Game {
   throw new Error('no seed reached a checkpoint')
 }
 
-describe('fee, fee rows and pawn model text', () => {
+describe('fee and fee rows text', () => {
   const base = { failedCheckpointFeePercent: 10, buyIn: 100 }
   const cp: CheckpointResult = { stage: 1, entryBankroll: 100, target: 107, bankroll: 95, outcome: 'failed' }
   it('writes the fee warning and the free-leave line', () => {
@@ -402,22 +399,8 @@ describe('fee, fee rows and pawn model text', () => {
   })
   it('lists run stats', () => {
     const rows = runStatRows({ fightsCompleted: 5, stagesCleared: 1, bossesDefeated: 1, peakBankroll: 1200, totalWagered: 100, totalPaidOut: 184, seed: 3 })
-    expect(rows.map((r) => r.label)).toEqual(['Fights', 'Stages cleared', 'Bosses defeated', 'Peak bankroll', 'Total wagered', 'Total paid out', 'Seed'])
+    expect(rows.map((r) => r.label)).toEqual(['Fights', 'Levels cleared', 'Bosses defeated', 'Peak bankroll', 'Total wagered', 'Total paid out', 'Seed'])
     expect(rows[3]?.value).toBe('1,200')
-  })
-  it('builds the pawn model only for an out-of-coins player with upgrades', () => {
-    const owned = [up('shield', 'Shield'), up('vitality', 'Vitality')]
-    expect(pawnModel({ canPawn: false, canBet: true, upgrades: owned })).toBeNull()
-    expect(pawnModel({ canPawn: true, canBet: true, upgrades: owned })).toBeNull()
-    const m = pawnModel({ canPawn: true, canBet: false, upgrades: owned })
-    expect(m?.title).toBe('You are out of coins')
-    expect(m?.items.map((i) => `${i.index}:${i.name}:${i.label}`)).toEqual(['0:Shield:Pawn +10 coins', '1:Vitality:Pawn +10 coins'])
-  })
-  it('notes the empty shop wallet and pluralises skip', () => {
-    expect(shopNote({ bankroll: 5, skipCoins: 1 })).toBeNull()
-    expect(shopNote({ bankroll: 0, skipCoins: 1 })).toContain('1 coin ')
-    expect(shopNote({ bankroll: 0, skipCoins: 5 })).toContain('5 coins')
-    expect(skipLabel(1)).toBe('Skip (+1 coin)')
   })
   it('wallets below the minimum buy-in lead to the refill state', () => {
     expect(lobbyState(60, CONFIG.buyInPresets, CONFIG.minBuyIn)).toBe('refill')
@@ -429,15 +412,15 @@ describe('fee, fee rows and pawn model text', () => {
   })
   it('builds the hud for a cleared checkpoint and an ordinary fight', () => {
     const passed: CheckpointResult = { stage: 2, entryBankroll: 100, target: 107, bankroll: 120, outcome: 'passed' }
-    const shared = { stage: 3, fightInStage: 0, fightsPerStage: 5, fightNumberInStage: 1, isBossFight: false, target: 128, bankroll: 120, lastCheckpoint: passed }
+    const shared = { level: 3, levelInfo: levelInfo(3), fightInStage: 0, fightsPerStage: 5, fightNumberInStage: 1, isBossFight: false, target: 128, bankroll: 120, lastCheckpoint: passed }
     const cleared = hudView({ ...shared, phase: 'checkpoint' })
-    expect(cleared.stage).toBe('2')
-    expect(cleared.fightText).toBe('Stage 2 cleared')
+    expect(cleared.level).toBe('Level 2 - Normal')
+    expect(cleared.fightText).toBe('Level 2 cleared')
     expect(cleared.targetText).toBe('Target 107 reached')
     expect(cleared.pips.every((p) => p.state === 'done')).toBe(true)
     expect(cleared.met).toBe(true)
     const next = hudView({ ...shared, phase: 'bet' })
-    expect(next.stage).toBe('3')
+    expect(next.level).toBe('Level 3 - Tricky')
     expect(next.fightText).toBe('Fight 1 of 5')
     expect(next.targetText).toBe('Target 128 after the boss')
     expect(next.met).toBe(false)
@@ -455,26 +438,6 @@ function playToFailedCheckpoint(seed: number): Game | null {
     else if (s.phase === 'shop') g.dispatch({ type: 'skip' })
   }
   return g.state.gameOverReason === 'checkpoint' ? g : null
-}
-
-function playToPawn(seed: number): Game | null {
-  const g = createGame(seed, 100)
-  g.dispatch({ type: 'bet', amount: g.state.minBet })
-  let guard = 0
-  while (g.state.phase === 'fight' && guard++ < 100) g.dispatch({ type: 'roll' })
-  g.dispatch({ type: 'continue' })
-  if (g.state.phase !== 'shop') return null
-  g.dispatch({ type: 'pickUpgrade', index: 0 })
-  g.dispatch({ type: 'bet', amount: g.state.maxBet })
-  guard = 0
-  while ((g.state.phase as string) === 'fight' && guard++ < 100) g.dispatch({ type: 'roll' })
-  const after: string = g.state.phase
-  if (g.state.bankroll !== 0 || after !== 'result') return null
-  g.dispatch({ type: 'continue' })
-  const next: string = g.state.phase
-  if (next !== 'shop') return null
-  g.dispatch({ type: 'pickUpgrade', index: 0 })
-  return g.state.canPawn ? g : null
 }
 
 describe('helpers against a real failed checkpoint', () => {
@@ -508,30 +471,6 @@ describe('helpers against a real failed checkpoint', () => {
 })
 
 describe('helpers against a real out-of-coins game', () => {
-  it('builds the pawn model from a game at 0 coins with upgrades', () => {
-    let g: Game | null = null
-    for (let seed = 1; seed < 300 && !g; seed++) g = playToPawn(seed)
-    if (!g) throw new Error('no pawn state found')
-    const s = g.state
-    expect(s.phase).toBe('bet')
-    expect(s.bankroll).toBe(0)
-    expect(s.canBet).toBe(false)
-    expect(visiblePresets(s)).toEqual([])
-    const m = pawnModel(s)
-    if (!m) throw new Error('no pawn model')
-    expect(m.items).toHaveLength(s.upgrades.length)
-    expect(m.items.length).toBeGreaterThan(0)
-    m.items.forEach((item, i) => {
-      expect(item.index).toBe(i)
-      expect(item.name).toBe(s.upgrades[i]?.name)
-      expect(item.value).toBe(s.pawnValue)
-      expect(item.label).toBe(`Pawn +${coinsText(s.pawnValue)}`)
-    })
-    expect(g.dispatch({ type: 'pawn', index: m.items[0]?.index ?? 0 })).toBe(true)
-    expect(g.state.bankroll).toBe(s.pawnValue)
-    expect(pawnModel(g.state)).toBeNull()
-  })
-
   it('shows the broke game over with nothing returned', () => {
     let g: Game | null = null
     for (let seed = 1; seed < 100 && !g; seed++) {
@@ -557,7 +496,7 @@ describe('helpers accept real game state', () => {
   it('drives bet, rolls, result and shop', () => {
     const g = createGame(7, 100)
     expect(visiblePresets(g.state).length).toBeGreaterThan(1)
-    expect(targetLine(g.state)).toBe('Target 107 after the boss')
+    expect(targetLine(g.state)).toBe('Target 104 after the boss')
     expect(fightLabel(g.state)).toBe('Fight 1 of 5')
     expect(g.dispatch({ type: 'bet', amount: g.state.minBet })).toBe(true)
     playFight(g)
@@ -577,17 +516,17 @@ describe('helpers accept real game state', () => {
     expect(stageNotice(g.state)).toBeNull()
   })
 
-  it('plays a whole stage, checks the checkpoint text and leaves', () => {
+  it('plays a whole level, checks the checkpoint text and leaves', () => {
     const g = findCheckpointGame()
     const s = g.state
     expect(s.phase).toBe('checkpoint')
     expect(s.canLeave).toBe(true)
     expect(s.lastCheckpoint?.outcome).toBe('passed')
     expect(s.lastResult?.isBoss).toBe(true)
-    expect(checkpointHeadline(s.lastCheckpoint)).toBe('Stage 1 cleared')
-    expect(stageNotice(s)).toBe(`Stage 1 cleared, new target ${formatCoins(s.target)}`)
+    expect(checkpointHeadline(s.lastCheckpoint)).toBe('Level 1 cleared')
+    expect(stageNotice(s)).toBe(`Level 1 cleared, new target ${formatCoins(s.target)}`)
     expect(leaveLabel(s.bankroll)).toBe(`Leave with ${coinsText(s.bankroll)}`)
-    expect(continueLabel(s.stage)).toBe('Continue to stage 2')
+    expect(continueLabel(s.stage)).toBe('Continue to level 2')
     expect(nextTargetLine(s)).toContain(formatCoins(s.target))
     expect(checkpointNet(s.bankroll, s.buyIn)).toMatch(/^[+-][\d,]+ vs your buy-in of 100$/)
     expect(targetLine(s)).toBe(`Target ${formatCoins(s.target)} after the boss`)
@@ -608,11 +547,110 @@ describe('helpers accept real game state', () => {
     expect(CONFIG.buyInPresets).toContain(end.buyIn)
   })
 
-  it('continue after the checkpoint opens the shop and starts stage 2', () => {
+  it('continue after the checkpoint opens the shop and starts level 2', () => {
     const g = findCheckpointGame()
     expect(g.dispatch({ type: 'continue' })).toBe(true)
     expect(g.state.phase).toBe('shop')
     expect(g.state.stage).toBe(2)
     expect(fightLabel(g.state)).toBe('Fight 1 of 5')
+  })
+})
+
+describe('level text helpers', () => {
+  it('titles a level with its label', () => {
+    expect(levelTitle(3, 'Tricky')).toBe('Level 3 - Tricky')
+    expect(nextLevelTitle(levelInfo(4))).toBe('Next: Level 4 - Hard')
+  })
+
+  it('writes a one-line profile from the level info', () => {
+    const i = levelInfo(3)
+    const line = levelProfileLine(i)
+    expect(line).toBe(`Enemies ${i.enemyDiceText} | Knockout ${formatMultiplier(i.koMultiplier)} | Target +${i.targetGrowthPercent}%`)
+    expect(line).toContain('2d6+3')
+    expect(line).not.toContain('\n')
+    const boss = levelProfileLine(i, true)
+    expect(boss).toBe(`Boss ${i.bossDiceText} | Knockout ${formatMultiplier(i.bossKoMultiplier)} | Target +${i.targetGrowthPercent}%`)
+    expect(boss).not.toBe(line)
+  })
+
+  it('writes the full profile and the max win for the next level', () => {
+    const i = levelInfo(2)
+    const full = levelFullProfileLine(i)
+    expect(full).toContain(i.enemyDiceText)
+    expect(full).toContain(i.bossDiceText)
+    expect(full).toContain(formatMultiplier(i.koMultiplier))
+    expect(full).toContain(formatMultiplier(i.bossKoMultiplier))
+    expect(maxWinLine(i)).toBe(`Max win this level: ${formatMultiplier(i.maxWinPerLevel)} your bankroll`)
+    expect(maxWinLine(levelInfo(4))).not.toBe(maxWinLine(levelInfo(3)))
+  })
+
+  it('has a lobby blurb about easier early and harder richer later', () => {
+    const t = levelsBlurb().toLowerCase()
+    expect(t).toContain('easy')
+    expect(t).toContain('harder')
+    expect(t).toContain('richer')
+  })
+
+  it('shows the next level on a real checkpoint, one level above the cleared one', () => {
+    const g = findCheckpointGame()
+    const s = g.state
+    const cp = s.lastCheckpoint
+    expect(cp?.outcome).toBe('passed')
+    expect(s.levelInfo.level).toBe((cp?.stage ?? 0) + 1)
+    expect(s.level).toBe(s.levelInfo.level)
+    expect(nextLevelTitle(s.levelInfo)).toBe(`Next: Level ${s.level} - ${s.levelInfo.difficultyLabel}`)
+    expect(hudView(s).level).toBe(`Level ${cp?.stage} - Easy`)
+    expect(maxWinLine(s.levelInfo)).toContain(formatMultiplier(s.levelInfo.maxWinPerLevel))
+  })
+
+  it('shows the current level in the hud for a fresh run', () => {
+    const s = createGame(1, 100).state
+    expect(hudView(s).level).toBe('Level 1 - Easy')
+    expect(levelProfileLine(s.levelInfo)).toContain(s.levelInfo.enemyDiceText)
+  })
+})
+
+describe('walk-away breakdown text', () => {
+  it('lists the refund and the share of earned payout with their percents', () => {
+    const r = { outcome: 'walkedAway', walkAwayRefund: 30, walkAwayFromEarned: 40 } as const
+    expect(walkAwayRows(r, 30, 50)).toEqual([
+      { label: 'Bet refund (30%)', value: '30' },
+      { label: 'Share of earned payout (50%)', value: '40' },
+    ])
+    expect(walkAwayRows(r, 50, 50)[0]?.label).toBe('Bet refund (50%)')
+    expect(walkAwayRows(r, null, null).map((x) => x.label)).toEqual(['Bet refund', 'Share of earned payout'])
+  })
+
+  it('shows nothing for other outcomes', () => {
+    expect(walkAwayRows({ outcome: 'won', walkAwayRefund: 0, walkAwayFromEarned: 0 }, 30, 50)).toEqual([])
+    expect(walkAwayRows({ outcome: 'lost', walkAwayRefund: 0, walkAwayFromEarned: 0 }, 30, 50)).toEqual([])
+  })
+
+  it('matches a real walk-away from the core state', () => {
+    for (let seed = 1; seed < 300; seed++) {
+      const g = createGame(seed, 1000)
+      g.dispatch({ type: 'bet', amount: 500 })
+      g.dispatch({ type: 'roll' })
+      if (g.state.fight?.canWalkAway !== true) continue
+      const f = g.state.fight
+      expect(g.dispatch({ type: 'walkAway' })).toBe(true)
+      const s = g.state
+      const r = s.lastResult
+      if (!r) throw new Error('no result')
+      expect(s.phase).toBe('result')
+      const pct = walkAwayPercents(s.fight)
+      expect(pct.refund).toBe(f.walkAwayRefundPercent)
+      expect(pct.keep).toBe(50)
+      const rows = walkAwayRows(r, pct.refund, pct.keep)
+      expect(rows.map((x) => x.value)).toEqual([formatCoins(r.walkAwayRefund), formatCoins(r.walkAwayFromEarned)])
+      expect(r.walkAwayRefund + r.walkAwayFromEarned).toBe(r.payout)
+      expect(rows[0]?.label).toBe(`Bet refund (${f.walkAwayRefundPercent}%)`)
+      return
+    }
+    throw new Error('no walk-away found')
+  })
+
+  it('reads no percents without a fight', () => {
+    expect(walkAwayPercents(null)).toEqual({ refund: null, keep: null })
   })
 })

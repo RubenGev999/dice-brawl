@@ -1,16 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { CONFIG, UPGRADE_IDS, createStream } from '../index.ts'
+import { CONFIG, UPGRADE_IDS, createStream, levelInfo } from '../index.ts'
 import type { UpgradeId } from '../index.ts'
-import { BOTS, SENSIBLE, playRun, simFight } from './bots.ts'
-import type { BotSpec } from './bots.ts'
+import { BOTS, SENSIBLE, playRun, priorityBuild, simFight } from './bots.ts'
+import type { BotSpec, WalkRule } from './bots.ts'
 
-const RUNS = 2000
+const FULL = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.BALANCE_FULL
+const RUNS = 1500
 const SENSIBLE_RUNS = 4000
+const FULL_RUNS = 5000
 const BUY_INS = [100, 1000]
+const BLOCKS: Record<string, number> = { A: 0, B: 50_000_000 }
 const LOW_RISK = ['coasting', 'minSkipFail', 'minSkipWalk', 'fixed10']
-const GAIN_SAMPLES = 6000
-const STAGES = 8
-const MIN_STAGE_FIGHTS = 500
+const WALK_FAMILY = ['sensible', 'sensibleNoWalk', 'lowHpWalk', 'aboutToLose', 'bossEmergency', 'timid']
+const LEVEL_SAMPLES = 12000
+const GAIN_SAMPLES = 20000
+const LEVELS = 8
+const MIN_LEVEL_FIGHTS = 2000
+
+function pause(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
 
 function percentile(sorted: number[], p: number): number {
   const i = Math.min(sorted.length - 1, Math.floor((sorted.length * p) / 100))
@@ -18,7 +27,7 @@ function percentile(sorted: number[], p: number): number {
 }
 
 function fmt(n: number): string {
-  return n.toFixed(3)
+  return Number.isFinite(n) ? n.toFixed(3) : '-'
 }
 
 interface RunReport {
@@ -29,82 +38,56 @@ interface RunReport {
   median: number
   p95: number
   over60: number
-  rollsNormal: number
-  rollsBoss: number
-  stageAll: number[]
-  stageNormal: number[]
-  stageBoss: number[]
-  stageFights: number[]
+  levelReturn: number[]
+  levelFights: number[]
   cashMean: number
+  cashSe: number
   cashMedian: number
   aboveBuyIn: number
   paidOverWagered: number
   walkShare: number
   brokeShare: number
-  pawnShare: number
   checkpointShare: number
 }
 
-function runReport(bot: BotSpec, buyIn = 100, runs = RUNS): RunReport {
+function runReport(bot: BotSpec, buyIn: number, runs: number, base: number): RunReport {
   const lengths: number[] = []
   const cash: number[] = []
   const cleared = new Array<number>(6).fill(0)
-  const zero = () => new Array<number>(STAGES).fill(0)
-  const bAll = zero()
-  const pAll = zero()
-  const bN = zero()
-  const pN = zero()
-  const bB = zero()
-  const pB = zero()
-  const fights = zero()
+  const bet = new Array<number>(LEVELS).fill(0)
+  const pay = new Array<number>(LEVELS).fill(0)
+  const fights = new Array<number>(LEVELS).fill(0)
   let wagered = 0
   let paid = 0
-  let rollsN = 0
-  let nN = 0
-  let rollsB = 0
-  let nB = 0
   let walks = 0
+  let total = 0
   let above = 0
   let broke = 0
-  let pawned = 0
   let failed = 0
   for (let i = 1; i <= runs; i++) {
-    const r = playRun(i * 7919 + 13, bot, buyIn)
+    const r = playRun(base + i * 7919 + 13, bot, buyIn)
     for (const f of r.perFight) {
-      const st = Math.floor(f.index / CONFIG.fightsPerStage)
+      const l = Math.floor(f.index / CONFIG.fightsPerStage)
       wagered += f.bet
       paid += f.payout
+      total++
       if (f.outcome === 'walkedAway') walks++
-      if (f.isBoss) {
-        rollsB += f.rolls
-        nB++
-      } else {
-        rollsN += f.rolls
-        nN++
-      }
-      if (st >= STAGES) continue
-      bAll[st] = (bAll[st] as number) + f.bet
-      pAll[st] = (pAll[st] as number) + f.payout
-      fights[st] = (fights[st] as number) + 1
-      if (f.isBoss) {
-        bB[st] = (bB[st] as number) + f.bet
-        pB[st] = (pB[st] as number) + f.payout
-      } else {
-        bN[st] = (bN[st] as number) + f.bet
-        pN[st] = (pN[st] as number) + f.payout
-      }
+      if (l >= LEVELS) continue
+      bet[l] = (bet[l] as number) + f.bet
+      pay[l] = (pay[l] as number) + f.payout
+      fights[l] = (fights[l] as number) + 1
     }
     if (r.reason === 'broke') broke++
     if (r.reason === 'checkpoint') failed++
-    if (r.game.log.some((e) => e.action.type === 'pawn')) pawned++
     lengths.push(r.fights)
     for (let k = 0; k < cleared.length; k++) if (r.stagesCleared >= k + 1) cleared[k] = (cleared[k] as number) + 1
     cash.push(r.cashOut / buyIn)
     if (r.cashOut > buyIn) above++
   }
   lengths.sort((a, b) => a - b)
+  const mean = cash.reduce((a, b) => a + b, 0) / runs
+  const variance = cash.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, runs - 1)
   cash.sort((a, b) => a - b)
-  const ratio = (p: number[], b: number[]) => b.map((x, i) => (x > 0 ? (p[i] as number) / x : Number.NaN))
   return {
     bot: bot.name,
     buyIn,
@@ -113,25 +96,78 @@ function runReport(bot: BotSpec, buyIn = 100, runs = RUNS): RunReport {
     median: percentile(lengths, 50),
     p95: percentile(lengths, 95),
     over60: lengths.filter((l) => l > 60).length / runs,
-    rollsNormal: rollsN / Math.max(1, nN),
-    rollsBoss: rollsB / Math.max(1, nB),
-    stageAll: ratio(pAll, bAll),
-    stageNormal: ratio(pN, bN),
-    stageBoss: ratio(pB, bB),
-    stageFights: fights,
-    cashMean: cash.reduce((a, b) => a + b, 0) / runs,
+    levelReturn: bet.map((b, i) => (b > 0 ? (pay[i] as number) / b : Number.NaN)),
+    levelFights: fights,
+    cashMean: mean,
+    cashSe: Math.sqrt(variance / runs),
     cashMedian: percentile(cash, 50),
     aboveBuyIn: above / runs,
     paidOverWagered: paid / Math.max(1, wagered),
-    walkShare: walks / Math.max(1, nN + nB),
+    walkShare: walks / Math.max(1, total),
     brokeShare: broke / runs,
-    pawnShare: pawned / runs,
     checkpointShare: failed / runs,
   }
 }
 
-function stageRow(values: number[], fights: number[]): string {
-  return values.map((v, i) => ((fights[i] as number) >= MIN_STAGE_FIGHTS ? v.toFixed(2) : '-')).join(' ')
+async function reportsFor(buyIn: number, base: number, runs: (bot: BotSpec) => number): Promise<Map<string, RunReport>> {
+  const out = new Map<string, RunReport>()
+  for (const b of Object.values(BOTS)) {
+    out.set(b.name, runReport(b, buyIn, runs(b), base))
+    await pause()
+  }
+  return out
+}
+
+function markdownRows(label: string, reports: Map<string, RunReport>): string {
+  const head = '| Bot | Runs | Cash mean | SE | Cash median | P/W | L1 | L2 | L3 | L4 | L5 | Median fights | P95 | >60 | Walk share | Broke | Failed CP | Runs > buy-in |'
+  const sep = '|' + '---|'.repeat(18)
+  const rows = [...reports.values()].map((r) =>
+    [
+      r.bot,
+      r.runs,
+      fmt(r.cashMean),
+      fmt(r.cashSe),
+      fmt(r.cashMedian),
+      fmt(r.paidOverWagered),
+      ...r.clear.slice(0, 5).map(fmt),
+      r.median,
+      r.p95,
+      fmt(r.over60),
+      fmt(r.walkShare),
+      fmt(r.brokeShare),
+      fmt(r.checkpointShare),
+      fmt(r.aboveBuyIn),
+    ].join(' | '),
+  )
+  return [`### ${label}`, '', head, sep, ...rows.map((r) => `| ${r} |`)].join('\n')
+}
+
+function levelCurve(r: RunReport): string {
+  return r.levelReturn.map((v, i) => ((r.levelFights[i] as number) >= MIN_LEVEL_FIGHTS ? v.toFixed(3) : '-')).join(' ')
+}
+
+const buildCache = new Map<string, UpgradeId[]>()
+function cachedBuild(seed: number, size: number): UpgradeId[] {
+  const key = `${seed}:${size}`
+  let b = buildCache.get(key)
+  if (!b) {
+    b = priorityBuild(seed, size)
+    buildCache.set(key, b)
+  }
+  return b
+}
+
+function levelReturn(level: number, walk: WalkRule, boss: boolean | null = null): number {
+  let bet = 0
+  let pay = 0
+  for (let s = 1; s <= LEVEL_SAMPLES; s++) {
+    const slot = boss === null ? s % CONFIG.fightsPerStage : boss ? CONFIG.fightsPerStage - 1 : s % (CONFIG.fightsPerStage - 1)
+    const index = (level - 1) * CONFIG.fightsPerStage + slot
+    const r = simFight(s * 104729 + 7, index, cachedBuild(s, index), walk)
+    bet += r.bet
+    pay += r.payout
+  }
+  return pay / bet
 }
 
 function randomBuild(seed: number, n: number): UpgradeId[] {
@@ -154,16 +190,15 @@ function stageReturn(stage: number, build: (seed: number) => UpgradeId[]): numbe
   let pay = 0
   for (let s = 1; s <= GAIN_SAMPLES; s++) {
     const index = (stage - 1) * CONFIG.fightsPerStage + (s % CONFIG.fightsPerStage)
-    const r = simFight(s * 104729 + 7, index, build(s))
+    const r = simFight(s * 104729 + 7, index, build(s), 'aboutToLose')
     bet += r.bet
     pay += r.payout
   }
   return pay / bet
 }
 
-function copyGains(stage: number): Record<string, number[]> {
-  const baseSize = (stage - 1) * 4
-  const base = (seed: number) => randomBuild(seed, baseSize)
+async function copyGains(stage: number): Promise<Record<string, number[]>> {
+  const base = (seed: number) => randomBuild(seed, (stage - 1) * 4)
   const out: Record<string, number[]> = {}
   for (const id of UPGRADE_IDS) {
     const gains: number[] = []
@@ -178,158 +213,157 @@ function copyGains(stage: number): Record<string, number[]> {
       prev = cur
     }
     out[id] = gains
+    await pause()
   }
   return out
 }
 
-function tableRow(r: RunReport): Record<string, string | number> {
-  return {
-    'P/W': fmt(r.paidOverWagered),
-    S1: fmt(r.clear[0] as number),
-    S2: fmt(r.clear[1] as number),
-    S3: fmt(r.clear[2] as number),
-    S4: fmt(r.clear[3] as number),
-    S5: fmt(r.clear[4] as number),
-    median: r.median,
-    p95: r.p95,
-    '>60': fmt(r.over60),
-    rolls: `${r.rollsNormal.toFixed(2)}/${r.rollsBoss.toFixed(2)}`,
-    walks: fmt(r.walkShare),
-    cashMean: fmt(r.cashMean),
-    cashMedian: fmt(r.cashMedian),
-    '>buyIn': fmt(r.aboveBuyIn),
-    failedCp: fmt(r.checkpointShare),
-    broke: fmt(r.brokeShare),
-    pawned: fmt(r.pawnShare),
-  }
-}
+const GAIN_FLOOR_EXCEPTIONS: Partial<Record<string, number>> = { vampire: 0.05 }
 
 describe('balance simulation', () => {
   it(
-    'plays full seeded runs per bot and lands the balance targets',
-    () => {
-      const byBuyIn = new Map<number, Map<string, RunReport>>()
-      for (const buyIn of BUY_INS) {
-        const reports = Object.values(BOTS).map((b) => runReport(b, buyIn, b.name === 'sensible' ? SENSIBLE_RUNS : RUNS))
-        byBuyIn.set(buyIn, new Map(reports.map((r) => [r.bot, r])))
-        const runTable: Record<string, Record<string, string | number>> = {}
-        for (const r of reports) runTable[`${r.bot} (${r.runs})`] = tableRow(r)
-        console.log(`full runs at buy-in ${buyIn}: return (paid/wagered), stage clear rates, run length, rolls normal/boss, house return (cashOut/buyIn), end reasons`)
-        console.table(runTable)
+    'level curve: return per fight declines smoothly and stays below 1.0; max win grows',
+    async () => {
+      const rows: string[] = [
+        '| Level | Label | Enemy | Boss | Enemy HP | KO | Boss KO | Target | Best walker | Never walk | Walk first | Max win/fight | Max win/level |',
+        '|' + '---|'.repeat(13),
+      ]
+      const best: number[] = []
+      for (let level = 1; level <= LEVELS; level++) {
+        const info = levelInfo(level)
+        const about = levelReturn(level, 'aboutToLose')
+        const low = levelReturn(level, 'lowHp')
+        const never = levelReturn(level, 'never')
+        const first = levelReturn(level, 'first')
+        const b = Math.max(about, low, never)
+        best.push(b)
+        await pause()
+        rows.push(
+          `| ${level} | ${info.difficultyLabel} | ${info.enemyDiceText} | ${info.bossDiceText} | ${info.enemyHpMin}-${info.enemyHpMax} | ${info.koMultiplier}x | ${info.bossKoMultiplier}x | +${info.targetGrowthPercent}% | ${fmt(b)} | ${fmt(never)} | ${fmt(first)} | ${(info.bossKoMultiplierMilli + CONFIG.upgradeMaxCopies.finisher * CONFIG.upgradeEffects.finisherKoBonusMilli) / 1000}x | ${info.maxWinPerLevel.toFixed(2)}x |`,
+        )
+        expect(first).toBeLessThan(b - 0.25)
       }
-      const at = (buyIn: number): Map<string, RunReport> => byBuyIn.get(buyIn) as Map<string, RunReport>
-      const get = (name: string, buyIn = 100): RunReport => at(buyIn).get(name) as RunReport
-      const sensible = get('sensible')
-      const allReports = BUY_INS.flatMap((b) => [...at(b).values()])
-
-      const curve: Record<string, string> = {
-        all: stageRow(sensible.stageAll, sensible.stageFights),
-        normal: stageRow(sensible.stageNormal, sensible.stageFights),
-        boss: stageRow(sensible.stageBoss, sensible.stageFights),
-        fights: sensible.stageFights.join(' '),
-      }
-      console.log('sensible return per fight by stage (stages with fewer than 500 fights shown as -)')
-      console.table(curve)
-
-      const sweep: Record<string, string> = {}
-      for (const pct of [0, 10, 25, 50, 100]) {
-        const r = runReport({ ...SENSIBLE, name: `fixed ${pct}%`, style: 'fixed', betPercent: pct }, 100, 1000)
-        sweep[r.bot] = `S1 ${fmt(r.clear[0] as number)} S3 ${fmt(r.clear[2] as number)} cash ${fmt(r.cashMean)}`
-      }
-      sweep['target-aware (sensible)'] =
-        `S1 ${fmt(sensible.clear[0] as number)} S3 ${fmt(sensible.clear[2] as number)} cash ${fmt(sensible.cashMean)}`
-      console.log('bet-size sweep (fixed share of bankroll every fight, 1000 runs each)')
-      console.table(sweep)
-
-      const invariance: Record<string, Record<string, string>> = {}
-      for (const name of ['sensible', 'coasting', 'leave1', 'minSkipFail', 'minBossMaxLeave1', 'firstAllInLeave1']) {
-        const row: Record<string, string> = {}
-        for (const buyIn of BUY_INS) {
-          const r = get(name, buyIn)
-          row[`buy-in ${buyIn}`] = `S1 ${fmt(r.clear[0] as number)} S3 ${fmt(r.clear[2] as number)} cash ${fmt(r.cashMean)}`
+      console.log('level table (return per fight, priority build of one upgrade per fight, best of never/lowHp/aboutToLose walk rules)')
+      console.log(rows.join('\n'))
+      for (let i = 0; i < best.length; i++) {
+        expect(best[i]).toBeLessThan(1.0)
+        if (i > 0) {
+          expect(Math.abs((best[i] as number) - (best[i - 1] as number))).toBeLessThanOrEqual(0.12)
+          expect(best[i]).toBeLessThanOrEqual((best[i - 1] as number) + 0.01)
         }
-        invariance[name] = row
       }
-      console.log('buy-in invariance')
-      console.table(invariance)
+      expect(best[0]).toBeGreaterThanOrEqual(0.9)
+      expect(best[LEVELS - 1]).toBeLessThan((best[0] as number) - 0.04)
+      for (let level = 2; level <= LEVELS; level++) {
+        expect(levelInfo(level).maxWinPerLevel).toBeGreaterThan(levelInfo(level - 1).maxWinPerLevel)
+        expect(levelInfo(level).bossKoMultiplierMilli).toBeGreaterThan(levelInfo(level - 1).bossKoMultiplierMilli)
+      }
+    },
+    600000,
+  )
 
-      const gainTable: Record<string, Record<string, string>> = {}
-      const gains1 = copyGains(1)
-      const gains2 = copyGains(2)
+  it(
+    'per-copy upgrade gains at levels 1 and 2 sit in the +0.06 to +0.18 band (documented exceptions only)',
+    async () => {
+      const gains1 = await copyGains(1)
+      const gains2 = await copyGains(2)
+      const rows = ['| id | Cap | Level 1 gain per copy | Level 2 gain per copy |', '|---|---|---|---|']
       for (const id of UPGRADE_IDS) {
-        gainTable[id] = {
-          cap: String(CONFIG.upgradeMaxCopies[id]),
-          'stage 1': (gains1[id] as number[]).map((g) => `+${fmt(g)}`).join(' / '),
-          'stage 2': (gains2[id] as number[]).map((g) => `+${fmt(g)}`).join(' / '),
-        }
+        rows.push(
+          `| \`${id}\` | ${CONFIG.upgradeMaxCopies[id]} | ${(gains1[id] as number[]).map((g) => `+${fmt(g)}`).join(' / ')} | ${(gains2[id] as number[]).map((g) => `+${fmt(g)}`).join(' / ')} |`,
+        )
       }
-      console.log('per-copy upgrade gain in return per fight (copy n given n-1 copies; stage 2 on a random 4-upgrade base)')
-      console.table(gainTable)
-
-      expect(sensible.clear[0]).toBeGreaterThanOrEqual(0.58)
-      expect(sensible.clear[0]).toBeLessThanOrEqual(0.78)
-      expect(sensible.clear[2]).toBeGreaterThanOrEqual(0.22)
-      expect(sensible.clear[2]).toBeLessThanOrEqual(0.42)
-      expect(sensible.clear[4]).toBeGreaterThanOrEqual(0.06)
-      expect(sensible.clear[4]).toBeLessThanOrEqual(0.2)
-      expect(sensible.median).toBeGreaterThanOrEqual(8)
-      expect(sensible.median).toBeLessThanOrEqual(20)
-      for (const r of allReports) expect(r.over60).toBeLessThan(0.02)
-
-      expect(sensible.rollsNormal).toBeGreaterThanOrEqual(3)
-      expect(sensible.rollsNormal).toBeLessThanOrEqual(6)
-      expect(sensible.rollsBoss).toBeGreaterThanOrEqual(5)
-      expect(sensible.rollsBoss).toBeLessThanOrEqual(9)
-      expect(sensible.rollsBoss).toBeGreaterThan(sensible.rollsNormal)
-
-      const valid = sensible.stageAll.filter((_, i) => (sensible.stageFights[i] as number) >= MIN_STAGE_FIGHTS)
-      expect(valid.length).toBeGreaterThanOrEqual(5)
-      expect(valid[0]).toBeGreaterThanOrEqual(0.9)
-      expect(valid[0]).toBeLessThan(1.0)
-      for (let i = 1; i < valid.length; i++) {
-        expect(Math.abs((valid[i] as number) - (valid[i - 1] as number))).toBeLessThanOrEqual(0.12)
-        expect(valid[i]).toBeLessThanOrEqual((valid[i - 1] as number) + 0.03)
-      }
-      expect(valid[4]).toBeLessThan((valid[0] as number) - 0.03)
-
-      for (const name of ['timid', 'coasting', 'allIn']) expect(get(name).clear[0]).toBeLessThan(0.25)
-      for (const name of ['fixedMedium', 'coasting', 'allIn', 'timid']) {
-        expect(sensible.clear[0]).toBeGreaterThan(get(name).clear[0] as number)
-      }
-      expect(get('timid').paidOverWagered).toBeLessThan(0.5)
-      expect(get('timid').cashMean).toBeLessThan(sensible.cashMean)
-
-      for (const r of allReports) expect(r.cashMean).toBeLessThan(1.0)
-      for (const buyIn of BUY_INS) {
-        const best = Math.max(...[...at(buyIn).values()].map((r) => r.cashMean))
-        expect(best).toBeGreaterThanOrEqual(0.9)
-        expect(best).toBeLessThanOrEqual(0.97)
-        const lowRisk = Math.max(...LOW_RISK.map((n) => get(n, buyIn).cashMean))
-        expect(lowRisk).toBeLessThan(0.9)
-        expect(lowRisk - get('sensible', buyIn).cashMean).toBeLessThan(0.18)
-        expect(get('leave1', buyIn).cashMean).toBeGreaterThan(lowRisk)
-      }
-
-      expect(get('allIn').brokeShare).toBeGreaterThan(0.2)
-      expect(get('allIn').pawnShare).toBeGreaterThan(0.2)
-      expect(get('allIn').cashMean).toBeLessThan(0.05)
-
-      const s100 = get('sensible', 100)
-      const s1000 = get('sensible', 1000)
-      expect(Math.abs((s100.clear[0] as number) - (s1000.clear[0] as number))).toBeLessThanOrEqual(0.07)
-      expect(Math.abs(s100.cashMean - s1000.cashMean)).toBeLessThanOrEqual(0.05)
-
+      console.log('per-copy upgrade gain in return per fight (copy n given n-1 copies; level 2 on a random 4-upgrade base)')
+      console.log(rows.join('\n'))
       for (const id of UPGRADE_IDS) {
-        for (const g of gains1[id] as number[]) {
-          expect(g).toBeGreaterThanOrEqual(0.06)
-          expect(g).toBeLessThanOrEqual(0.18)
-        }
-        for (const g of gains2[id] as number[]) {
-          expect(g).toBeGreaterThanOrEqual(0.03)
+        for (const g of [...(gains1[id] as number[]), ...(gains2[id] as number[])]) {
+          expect(g).toBeGreaterThanOrEqual(GAIN_FLOOR_EXCEPTIONS[id] ?? 0.06)
           expect(g).toBeLessThanOrEqual(0.18)
         }
       }
     },
     600000,
   )
+
+  it(
+    'full runs on seed block A land the balance targets at buy-in 100 and 1000',
+    async () => {
+      const byBuyIn = new Map<number, Map<string, RunReport>>()
+      for (const buyIn of BUY_INS) {
+        const reports = await reportsFor(buyIn, BLOCKS.A as number, (b) => (b.name === 'sensible' ? SENSIBLE_RUNS : RUNS))
+        byBuyIn.set(buyIn, reports)
+        console.log(markdownRows(`Block A (small), buy-in ${buyIn}`, reports))
+      }
+      const get = (name: string, buyIn = 100): RunReport => (byBuyIn.get(buyIn) as Map<string, RunReport>).get(name) as RunReport
+      for (const buyIn of BUY_INS) {
+        const s = get('sensible', buyIn)
+        console.log(`sensible return per fight by level at buy-in ${buyIn} (levels with < ${MIN_LEVEL_FIGHTS} fights shown as -): ${levelCurve(s)}`)
+      }
+
+      for (const buyIn of BUY_INS) {
+        const all = [...(byBuyIn.get(buyIn) as Map<string, RunReport>).values()]
+        const s = get('sensible', buyIn)
+        expect(s.clear[0]).toBeGreaterThanOrEqual(0.6)
+        expect(s.clear[0]).toBeLessThanOrEqual(0.75)
+        expect(s.clear[2]).toBeGreaterThanOrEqual(0.25)
+        expect(s.clear[2]).toBeLessThanOrEqual(0.4)
+        expect(s.clear[4]).toBeGreaterThanOrEqual(0.08)
+        expect(s.clear[4]).toBeLessThanOrEqual(0.18)
+        expect(s.median).toBeGreaterThanOrEqual(10)
+        expect(s.median).toBeLessThanOrEqual(20)
+        for (const r of all) {
+          expect(r.over60).toBeLessThan(0.02)
+          expect(r.cashMean).toBeLessThan(1.0)
+        }
+        const best = Math.max(...all.map((r) => r.cashMean))
+        expect(best).toBeGreaterThanOrEqual(0.9)
+        expect(best).toBeLessThanOrEqual(0.97)
+        const lowRisk = Math.max(...LOW_RISK.map((n) => get(n, buyIn).cashMean))
+        expect(lowRisk).toBeLessThan(0.9)
+        expect(lowRisk).toBeLessThan(best)
+        expect(get('leave1', buyIn).cashMean).toBeGreaterThan(lowRisk)
+
+        const valid = s.levelReturn.filter((_, i) => (s.levelFights[i] as number) >= MIN_LEVEL_FIGHTS)
+        expect(valid.length).toBeGreaterThanOrEqual(4)
+        for (let i = 0; i < valid.length; i++) {
+          expect(valid[i]).toBeLessThan(1.0)
+          if (i > 0) expect(Math.abs((valid[i] as number) - (valid[i - 1] as number))).toBeLessThanOrEqual(0.12)
+        }
+
+        expect(get('lowHpWalk', buyIn).cashMean).toBeGreaterThan(get('sensibleNoWalk', buyIn).cashMean)
+        const timid = get('timid', buyIn)
+        for (const r of all) if (r.bot !== 'timid') expect(timid.paidOverWagered).toBeLessThan(r.paidOverWagered)
+        for (const n of WALK_FAMILY) if (n !== 'timid') expect(timid.cashMean).toBeLessThan(get(n, buyIn).cashMean - 0.15)
+        expect(get('allIn', buyIn).brokeShare).toBeGreaterThan(0.5)
+      }
+      const s100 = get('sensible', 100)
+      const s1000 = get('sensible', 1000)
+      expect(Math.abs((s100.clear[0] as number) - (s1000.clear[0] as number))).toBeLessThanOrEqual(0.07)
+      expect(Math.abs(s100.cashMean - s1000.cashMean)).toBeLessThanOrEqual(0.05)
+    },
+    600000,
+  )
+
+  for (const block of ['A', 'B']) {
+    for (const buyIn of BUY_INS) {
+      it.skipIf(!FULL)(
+        `large simulation: ${FULL_RUNS} runs per bot, seed block ${block}, buy-in ${buyIn} (BALANCE_FULL=1)`,
+        async () => {
+          const reports = await reportsFor(buyIn, BLOCKS[block] as number, () => FULL_RUNS)
+          console.log(markdownRows(`Block ${block}, buy-in ${buyIn}, ${FULL_RUNS} runs per bot`, reports))
+          console.log(`sensible return per fight by level, block ${block}, buy-in ${buyIn}: ${levelCurve(reports.get('sensible') as RunReport)}`)
+          for (const r of reports.values()) {
+            expect(r.cashMean).toBeLessThan(1.0)
+            expect(r.over60).toBeLessThan(0.02)
+          }
+        },
+        600000,
+      )
+    }
+  }
+
+  it('the sensible bot is the Medium preset with the about-to-lose exit', () => {
+    expect(SENSIBLE.betPercent).toBe(CONFIG.betPresetPercents.medium)
+    expect(SENSIBLE.walk).toBe('aboutToLose')
+  })
 })

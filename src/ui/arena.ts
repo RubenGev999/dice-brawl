@@ -1,4 +1,4 @@
-import type { EnemyTraitId } from '../core/index.ts'
+import type { Archetype, EnemyTraitId } from '../core/index.ts'
 import { characterFor, characterSvg, HERO } from './fighters.ts'
 import type { FloatSpec, PlanStep, RollChip, Side } from './fighters.ts'
 import type { TagTone } from './effects.ts'
@@ -74,9 +74,9 @@ function makeSide(side: Side, svg: string, boss: boolean, trait: EnemyTraitId): 
   return { col, host, fighter, shake, flash, shield, bar, roll }
 }
 
-const MOTION_CLASSES = ['fx-windup', 'fx-lunge', 'fx-bounce', 'fx-ko', 'fx-dash']
+const MOTION_CLASSES = ['fx-windup', 'fx-lunge', 'fx-bounce', 'fx-ko']
 
-export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTraitId): Stage {
+export function createStage(enemyName: string, archetype: Archetype, isBoss: boolean, trait: EnemyTraitId): Stage {
   const root = el('div', 'stage')
   const money = el('div', 'stage-money')
   money.setAttribute('data-tut', 'money')
@@ -84,7 +84,7 @@ export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTrai
   const ko = el('div', 'ko')
   money.append(mult, ko)
   const sides: Record<Side, SideView> = {
-    enemy: makeSide('enemy', characterSvg(characterFor(enemyName, isBoss), trait), isBoss, trait),
+    enemy: makeSide('enemy', characterSvg(characterFor(enemyName, isBoss, archetype), trait), isBoss, trait),
     player: makeSide('player', characterSvg(HERO), false, 'plain'),
   }
   root.append(money, sides.enemy.col, sides.player.col)
@@ -145,10 +145,6 @@ export function createStage(enemyName: string, isBoss: boolean, trait: EnemyTrai
       case 'ko':
         sides[step.side].fighter.classList.remove('fx-lunge', 'fx-bounce')
         sides[step.side].fighter.classList.add('fx-ko')
-        break
-      case 'dash':
-        sides[step.side].fighter.classList.remove('fx-lunge', 'fx-bounce')
-        sides[step.side].fighter.classList.add('fx-dash')
         break
     }
   }

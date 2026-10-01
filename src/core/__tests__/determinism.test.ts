@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createGame, generateEnemy, isUseful, replay, shopOffersForFight, shopOrderForFight } from '../index.ts'
+import { RULES_VERSION, createGame, createGameFromLog, generateEnemy, isUseful, replay, shopOffersForFight, shopOrderForFight } from '../index.ts'
 import type { Game, UpgradeId } from '../index.ts'
 
 function scriptedRun(seed: number, buyIn: number): Game {
@@ -9,8 +9,7 @@ function scriptedRun(seed: number, buyIn: number): Game {
     const st = game.state
     for (let i = 0; i < (step * 7) % 5; i++) game.tick()
     if (st.phase === 'bet') {
-      if (st.canPawn) game.dispatch({ type: 'pawn', index: 0 })
-      else game.dispatch({ type: 'bet', amount: st.betPresets[n % 4]?.amount ?? st.minBet })
+      game.dispatch({ type: 'bet', amount: st.betPresets[n % 4]?.amount ?? st.minBet })
     } else if (st.phase === 'fight') {
       const f = st.fight
       if (f && f.canWalkAway && f.player.hp <= 2) game.dispatch({ type: 'walkAway' })
@@ -30,7 +29,7 @@ function scriptedRun(seed: number, buyIn: number): Game {
 }
 
 interface FightTrace {
-  enemy: { name: string; isBoss: boolean; dice: ReadonlyArray<number>; bonus: number; trait: string; maxHp: number }
+  enemy: { name: string; archetype: string; isBoss: boolean; dice: ReadonlyArray<number>; bonus: number; trait: string; maxHp: number }
   enemyFaces: ReadonlyArray<ReadonlyArray<number>>
   offers: ReadonlyArray<UpgradeId>
   owned: ReadonlyArray<UpgradeId>
@@ -46,8 +45,7 @@ function traceRun(
   for (let guard = 0; guard < 4000 && game.state.phase !== 'gameover' && out.length < 12; guard++) {
     const st = game.state
     if (st.phase === 'bet') {
-      if (st.canPawn) game.dispatch({ type: 'pawn', index: 0 })
-      else game.dispatch({ type: 'bet', amount: bet(st.bankroll, st.minBet, st.maxBet) })
+      game.dispatch({ type: 'bet', amount: bet(st.bankroll, st.minBet, st.maxBet) })
     } else if (st.phase === 'fight') {
       game.dispatch({ type: 'roll' })
     } else if (st.phase === 'result') {
@@ -58,6 +56,7 @@ function traceRun(
       out.push({
         enemy: {
           name: f.enemy.name,
+          archetype: f.enemy.archetype,
           isBoss: f.enemy.isBoss,
           dice: f.enemy.dice,
           bonus: f.enemy.bonus,
@@ -104,6 +103,47 @@ describe('determinism', () => {
     }
   })
 
+  it('createGameFromLog returns a live game equal to replay and to the original', () => {
+    for (const [seed, buyIn] of [
+      [1, 100],
+      [42, 250],
+      [777, 1000],
+    ] as const) {
+      const live = scriptedRun(seed, buyIn)
+      const resumed = createGameFromLog(seed, buyIn, live.log, live.state.tick)
+      expect(resumed.state).toEqual(live.state)
+      expect(resumed.state).toEqual(replay(seed, buyIn, live.log, live.state.tick))
+      expect(resumed.log).toEqual(live.log)
+      expect(resumed.state.rulesVersion).toBe(RULES_VERSION)
+    }
+  })
+
+  it('createGameFromLog resumes mid-fight and keeps playing identically', () => {
+    const live = createGame(5, 250)
+    live.dispatch({ type: 'bet', amount: 30 })
+    live.tick()
+    live.dispatch({ type: 'roll' })
+    const resumed = createGameFromLog(5, 250, live.log, live.state.tick)
+    expect(resumed.state).toEqual(live.state)
+    for (const g of [live, resumed]) {
+      for (let i = 0; i < 50 && g.state.phase === 'fight'; i++) g.dispatch({ type: 'roll' })
+    }
+    expect(resumed.state).toEqual(live.state)
+    expect(resumed.log).toEqual(live.log)
+  })
+
+  it('createGameFromLog throws on a rejected or out-of-order entry', () => {
+    expect(() => createGameFromLog(1, 100, [{ tick: 0, action: { type: 'roll' } }])).toThrow()
+    expect(() =>
+      createGameFromLog(1, 100, [
+        { tick: 3, action: { type: 'bet', amount: 10 } },
+        { tick: 1, action: { type: 'roll' } },
+      ]),
+    ).toThrow()
+    expect(createGameFromLog(1, 100, []).state).toEqual(createGame(1, 100).state)
+    expect(createGameFromLog(1, 100, [], 7).state.tick).toBe(7)
+  })
+
   it('replay without totalTicks stops at the last logged tick', () => {
     const live = scriptedRun(5, 100)
     const lastTick = live.log[live.log.length - 1]?.tick ?? 0
@@ -139,7 +179,7 @@ describe('determinism', () => {
       return order.find((j) => ids[j] !== 'intimidate') ?? 0
     }
     let compared = 0
-    for (const seed of [3, 42, 1001, 65535]) {
+    for (const seed of [3, 42, 1001, 65535, 7, 99, 12345, 31337]) {
       const a = traceRun(seed, (_, min) => min, (ids) => avoid(ids, 'first'))
       const b = traceRun(seed, (_, __, max) => max, (ids) => avoid(ids, 'last'))
       const n = Math.min(a.length, b.length)
@@ -152,6 +192,7 @@ describe('determinism', () => {
         const e = generateEnemy(seed, k)
         expect(ta.enemy).toEqual({
           name: e.name,
+          archetype: e.archetype,
           isBoss: e.isBoss,
           dice: e.dice,
           bonus: e.bonus,

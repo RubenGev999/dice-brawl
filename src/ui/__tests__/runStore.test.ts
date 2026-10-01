@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { CONFIG, createGame, replay } from '../../core/index.ts'
+import { CONFIG, RULES_VERSION, createGame, replay } from '../../core/index.ts'
 import type { Game } from '../../core/index.ts'
 import {
+  LEGACY_RUN_KEY,
   MAX_RESUME_TICKS,
   RUN_KEY,
   clearRun,
@@ -48,8 +49,7 @@ function bot(game: Game, i: number): void {
   const s = game.state
   switch (s.phase) {
     case 'bet':
-      if (s.canPawn) game.dispatch({ type: 'pawn', index: 0 })
-      else game.dispatch({ type: 'bet', amount: (s.betPresets[i % 3] ?? s.betPresets[0])?.amount ?? 1 })
+      game.dispatch({ type: 'bet', amount: (s.betPresets[i % 3] ?? s.betPresets[0])?.amount ?? 1 })
       break
     case 'fight':
       if (s.fight?.canWalkAway && i % 11 === 0) game.dispatch({ type: 'walkAway' })
@@ -137,6 +137,27 @@ describe('run persistence and resume', () => {
     expect(ms).toBeLessThan(3000)
   })
 
+  it('rejects a run saved under another rules version', () => {
+    const game = createGame(4, 100)
+    game.dispatch({ type: 'bet', amount: 20 })
+    const rec = snapshotRecord('x', game)
+    expect(rec.rules).toBe(RULES_VERSION)
+    expect(rebuildGame(rec)).not.toBeNull()
+    expect(rebuildGame({ ...rec, rules: '1.0.0-old' })).toBeNull()
+    expect(parseRecord({ ...rec, rules: 5 })).toBeNull()
+  })
+
+  it('returns null instead of throwing when the replay throws', () => {
+    const game = createGame(4, 100)
+    driveTo(game, 0, 5)
+    const rec = snapshotRecord('x', game)
+    const rejected: RunRecord = { ...rec, log: [{ tick: 0, action: { type: 'pickUpgrade', index: 0 } }, ...rec.log] }
+    expect(() => rebuildGame(rejected)).not.toThrow()
+    expect(rebuildGame(rejected)).toBeNull()
+    const old: RunRecord = { ...rec, log: [{ tick: 0, action: { type: 'bet', amount: 10 } }, { tick: 0, action: { type: 'roll' } }, { tick: 1, action: { type: 'walkAway' } }] }
+    expect(() => rebuildGame(old)).not.toThrow()
+  })
+
   it('rejects a run whose config fingerprint changed', () => {
     const game = createGame(4, 100)
     game.dispatch({ type: 'bet', amount: 20 })
@@ -188,7 +209,7 @@ describe('run persistence and resume', () => {
     expect(parseAction({ type: 'bet', amount: Infinity })).toBeNull()
     expect(parseAction({ type: 'pickUpgrade', index: 2 })).toEqual({ type: 'pickUpgrade', index: 2 })
     expect(parseAction({ type: 'pickUpgrade', index: -1 })).toBeNull()
-    expect(parseAction({ type: 'pawn', index: 0.5 })).toBeNull()
+    expect(parseAction({ type: 'pawn', index: 0 })).toBeNull()
     expect(parseAction({ type: 'roll', extra: 1 })).toEqual({ type: 'roll' })
     expect(parseAction('roll')).toBeNull()
   })
@@ -401,6 +422,63 @@ describe('wallet and run lifecycle', () => {
     expect(wallet.resumeRun()).toBe(true)
     expect(wallet.resumeRun()).toBe(false)
     wallet.settleRun(0)
+  })
+
+  it('discards a save from another rules version and refunds the buy-in with the existing message', () => {
+    const st = setup(1000)
+    const { game } = startStored(st, 250, 5)
+    driveTo(game, 0, 6)
+    const rec = snapshotRecord('run-1', game)
+    expect(rec.rules).toBe(RULES_VERSION)
+    st.setItem(RUN_KEY, JSON.stringify({ ...rec, rules: '1.0.0-old' }))
+
+    const wallet = createWallet(st, CONFIG.minBuyIn)
+    expect(wallet.balance()).toBe(750)
+    const outcome = resumeStored(st, wallet)
+    expect(outcome.kind).toBe('discarded')
+    if (outcome.kind !== 'discarded') return
+    expect(outcome.refunded).toBe(250)
+    expect(outcome.note).toBe('Your saved run could not be restored, so 250 coins were returned to your wallet.')
+    expect(wallet.balance()).toBe(1000)
+    expect(loadRun(st)).toEqual({ kind: 'none' })
+  })
+
+  it('treats a save without a rules version as corrupt and refunds a readable buy-in', () => {
+    const st = setup(1000)
+    const { game } = startStored(st, 100, 5)
+    const rec = snapshotRecord('run-1', game)
+    const { rules: _rules, ...withoutRules } = rec
+    st.setItem(RUN_KEY, JSON.stringify(withoutRules))
+    const wallet = createWallet(st, CONFIG.minBuyIn)
+    expect(resumeStored(st, wallet)).toMatchObject({ kind: 'discarded', refunded: 100 })
+    expect(wallet.balance()).toBe(1000)
+  })
+
+  it('refunds a run stored under the old key version once and removes it', () => {
+    const st = setup(1000)
+    const wallet0 = createWallet(st, CONFIG.minBuyIn)
+    expect(wallet0.startRun(250)).toBe(true)
+    st.setItem(LEGACY_RUN_KEY, JSON.stringify({ v: 1, id: 'old-run', buyIn: 250, seed: 1, log: [] }))
+    const wallet = createWallet(st, CONFIG.minBuyIn)
+    expect(wallet.balance()).toBe(750)
+    const outcome = resumeStored(st, wallet)
+    expect(outcome).toMatchObject({ kind: 'discarded', refunded: 250 })
+    expect(wallet.balance()).toBe(1000)
+    expect(st.data.has(LEGACY_RUN_KEY)).toBe(false)
+    const reload = createWallet(st, CONFIG.minBuyIn)
+    expect(resumeStored(st, reload)).toEqual({ kind: 'none' })
+    expect(reload.balance()).toBe(1000)
+  })
+
+  it('does not refund twice when the old-key run was already settled', () => {
+    const st = setup(1000)
+    st.setItem(WALLET_KEY, '1000|old-run')
+    st.setItem(LEGACY_RUN_KEY, JSON.stringify({ v: 1, id: 'old-run', buyIn: 250 }))
+    const wallet = createWallet(st, CONFIG.minBuyIn)
+    const outcome = resumeStored(st, wallet)
+    expect(outcome).toMatchObject({ kind: 'discarded', refunded: null })
+    expect(wallet.balance()).toBe(1000)
+    expect(st.data.has(LEGACY_RUN_KEY)).toBe(false)
   })
 
   it('does not settle while a run is still going', () => {

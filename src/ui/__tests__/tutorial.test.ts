@@ -101,6 +101,8 @@ describe('tutorial step selection', () => {
     expect(t).toContain('4,321')
     expect(t).toContain('17%')
     expect(t).toContain('7 enemies')
+    expect(t).toContain('level')
+    expect(t).not.toContain('stage')
   })
 
   it('uses the walk-away keep share from the fight state', () => {
@@ -112,10 +114,16 @@ describe('tutorial step selection', () => {
     const v = pickTutorial({ ...FRESH_TUTORIAL, next: 4 }, { mode: 'run', state: s })
     expect(v?.id).toBe('walk')
     expect(v?.text).toContain(`${keepPercent(s.fight.walkAwayKeep)}%`)
+    expect(v?.text).toContain(`${s.fight.walkAwayRefundPercent}% of your bet`)
+    expect(v?.text).not.toContain('only')
     expect(keepPercent(0.5)).toBe(50)
+    const altered: GameState = { ...s, fight: { ...s.fight, walkAwayRefundPercent: 50, walkAwayKeep: 0.4 } }
+    const t = refreshText(v!, { mode: 'run', state: altered })
+    expect(t).toContain('50% of your bet')
+    expect(t).toContain('40% of the payout')
   })
 
-  it('offers a shop tip once and an out-of-coins tip once', () => {
+  it('offers a shop tip once and says skipping pays nothing', () => {
     const game = createGame(7, 100)
     let guard = 0
     while (game.state.phase !== 'shop' && guard++ < 50) {
@@ -128,18 +136,8 @@ describe('tutorial step selection', () => {
     const tip = pickTutorial(done, ctxFor(game))
     expect(tip?.kind).toBe('tip')
     expect(tip?.id).toBe('tip-shop')
-    expect(tip?.text).toContain(String(game.state.skipCoins))
+    expect(tip?.text).toContain('pays nothing')
     expect(pickTutorial(acknowledge(done, tip!), ctxFor(game))).toBeNull()
-
-    const broke: GameState = { ...game.state, bankroll: 0, phase: 'shop' }
-    const seenShop = { ...done, shopTip: true }
-    const brokeTip = pickTutorial(seenShop, { mode: 'run', state: broke })
-    expect(brokeTip?.id).toBe('tip-broke')
-    expect(brokeTip?.target).toBe('skip')
-    expect(pickTutorial(acknowledge(seenShop, brokeTip!), { mode: 'run', state: broke })).toBeNull()
-    const brokeBet = pickTutorial(seenShop, { mode: 'run', state: { ...broke, phase: 'bet' } })
-    expect(brokeBet?.id).toBe('tip-broke')
-    expect(brokeBet?.target).toBe('pawn')
   })
 
   it('becomes inactive when the screen moves on', () => {
@@ -172,8 +170,9 @@ describe('tutorial persistence', () => {
   it('treats a missing flag as a first run and round-trips progress', () => {
     const st = memory()
     expect(loadTutorial(st)).toEqual(FRESH_TUTORIAL)
-    saveTutorial(st, { next: 3, shopTip: true, brokeTip: false, off: false })
-    expect(loadTutorial(st)).toEqual({ next: 3, shopTip: true, brokeTip: false, off: false })
+    saveTutorial(st, { next: 3, shopTip: true, off: false })
+    expect(loadTutorial(st)).toEqual({ next: 3, shopTip: true, off: false })
+    expect(parseTutorial('{"next":2,"shopTip":true,"brokeTip":true}')).toEqual({ next: 2, shopTip: true, off: false })
   })
 
   it('survives corrupt data and throwing storage', () => {

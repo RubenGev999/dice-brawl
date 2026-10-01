@@ -1,18 +1,22 @@
-import { CONFIG, MILLI } from './config.ts'
+import { CONFIG, MILLI, RULES_VERSION } from './config.ts'
 import { diceText, generateEnemy, isBossFight, traitText } from './enemies.ts'
 import {
   canWalkAway,
   createSimFight,
-  currentWalkAwayPayout,
+  currentWalkAwayParts,
   enemyCurrentBonus,
   fightPayout,
   lossPayoutAt,
   payoutAt,
+  playerCurrentBonus,
+  playerMaxFace,
+  resultTriggers,
   rollExchange,
 } from './fight.ts'
 import type { SimFight } from './fight.ts'
+import { levelDef, levelInfo } from './levels.ts'
 import { createStream } from './rng.ts'
-import { computeMods, countOwned, getUpgrade, isUseful, skipPawnValue, UPGRADE_IDS } from './upgrades.ts'
+import { computeMods, countOwned, getUpgrade, isUseful, UPGRADE_IDS } from './upgrades.ts'
 import type {
   Action,
   BetPreset,
@@ -60,20 +64,12 @@ export function isValidBuyIn(buyIn: number): boolean {
 }
 
 export function targetGrowthPercentForStage(stage: number): number {
-  return CONFIG.targetGrowthPercent + (stage - 1) * CONFIG.targetGrowthPerStagePercent
+  return levelDef(stage).targetGrowthPercent
 }
 
-export function targetFloorForStage(stage: number, buyIn: number): number {
-  if (CONFIG.targetFloorFirstPermilleOfBuyIn <= 0) return 0
-  let t = Math.floor((buyIn * CONFIG.targetFloorFirstPermilleOfBuyIn) / 1000)
-  for (let i = 1; i < stage; i++) t = Math.floor((t * CONFIG.targetFloorGrowthPercent) / 100)
-  return t
-}
-
-export function targetForStage(stage: number, entryBankroll: number, buyIn: number = CONFIG.defaultBuyIn): number {
+export function targetForStage(stage: number, entryBankroll: number): number {
   const g = targetGrowthPercentForStage(stage)
-  const relative = g <= -100 ? 0 : Math.max(entryBankroll + 1, Math.floor((entryBankroll * (100 + g)) / 100))
-  return Math.max(1, relative, targetFloorForStage(stage, buyIn))
+  return Math.max(1, entryBankroll + 1, Math.floor((entryBankroll * (100 + g)) / 100))
 }
 
 export function failedCheckpointFee(bankroll: number): number {
@@ -132,7 +128,7 @@ class GameImpl implements Game {
       stagesCleared: 0,
       bossesDefeated: 0,
       stageEntryBankroll: buyIn,
-      target: targetForStage(1, buyIn, buyIn),
+      target: targetForStage(1, buyIn),
       upgrades: [],
       shopOffers: [],
       lastResult: null,
@@ -230,16 +226,8 @@ class GameImpl implements Game {
       }
       case 'skip': {
         if (s.phase !== 'shop') return false
-        this.addCoins(skipPawnValue(s.buyIn))
         s.shopOffers = []
         s.phase = 'bet'
-        return true
-      }
-      case 'pawn': {
-        if (!this.canPawn()) return false
-        if (!Number.isInteger(action.index) || action.index < 0 || action.index >= s.upgrades.length) return false
-        s.upgrades = s.upgrades.filter((_, i) => i !== action.index)
-        this.addCoins(skipPawnValue(s.buyIn))
         return true
       }
       default:
@@ -278,11 +266,11 @@ class GameImpl implements Game {
       s.stage += 1
       s.fightInStage = 0
       s.stageEntryBankroll = s.bankroll
-      s.target = targetForStage(s.stage, s.bankroll, s.buyIn)
+      s.target = targetForStage(s.stage, s.bankroll)
       s.phase = 'checkpoint'
       return
     }
-    if (s.bankroll < 1 && s.upgrades.length === 0) {
+    if (s.bankroll < 1) {
       this.endRun('broke', 0, 0)
       return
     }
@@ -295,11 +283,6 @@ class GameImpl implements Game {
     s.phase = 'shop'
   }
 
-  private canPawn(): boolean {
-    const s = this.s
-    return s.phase === 'bet' && s.bankroll < 1 && s.upgrades.length > 0
-  }
-
   private settle(f: SimFight): void {
     const s = this.s
     const payout = fightPayout(f)
@@ -307,14 +290,19 @@ class GameImpl implements Game {
     s.totalPaidOut += payout
     s.fightsCompleted += 1
     if (f.isBoss && f.status === 'won') s.bossesDefeated += 1
+    const walked = f.status === 'walkedAway' ? currentWalkAwayParts(f) : null
     s.lastResult = {
       outcome: f.status === 'active' ? 'lost' : f.status,
       isBoss: f.isBoss,
+      level: f.level,
       bet: f.bet,
       multiplier: f.multiplierMilli / MILLI,
       multiplierMilli: f.multiplierMilli,
       payout,
       rolls: f.exchanges.length,
+      walkAwayRefund: walked ? walked.refund : 0,
+      walkAwayFromEarned: walked ? walked.fromEarned : 0,
+      upgradeTriggers: resultTriggers(f),
     }
     s.phase = 'result'
   }
@@ -348,13 +336,17 @@ class GameImpl implements Game {
     const m = f.mods
     const active = this.s.phase === 'fight' && f.status === 'active'
     const fullKo = f.fullKoMilli + f.koBonusMilli
+    const walk = currentWalkAwayParts(f)
+    const pBonus = playerCurrentBonus(f)
     return {
       index: f.index,
       stageOfFight: f.stage,
+      level: f.level,
       isBoss: f.isBoss,
       status: f.status,
       enemy: {
         name: f.enemy.name,
+        archetype: f.enemy.archetype,
         isBoss: f.enemy.isBoss,
         hp: f.enemyHp,
         maxHp: f.enemyMaxHp,
@@ -367,15 +359,18 @@ class GameImpl implements Game {
       },
       player: {
         hp: f.playerHp,
-        maxHp: m.maxHp,
+        maxHp: f.playerMaxHp,
         dice: m.dice,
         minFace: m.minFace,
+        maxFace: playerMaxFace(f),
         damageBonus: m.damageBonus,
         bonus: m.bonus,
-        diceText: diceText(m.dice, m.bonus),
+        currentBonus: pBonus,
+        diceText: diceText(m.dice, pBonus),
         shieldsLeft: f.shieldsLeft,
         rerollsLeft: f.rerollsLeft,
-        hasEscapeRope: m.escapeRope,
+        hitsLanded: f.hitsLanded,
+        walkAwayRefundPercent: m.walkAwayRefundMilli / 10,
       },
       bet: f.bet,
       multiplier: f.multiplierMilli / MILLI,
@@ -384,11 +379,15 @@ class GameImpl implements Game {
       koBonusMultiplier: f.koBonusMilli / MILLI,
       potentialPayout: payoutAt(f.bet, f.multiplierMilli),
       koPayout: payoutAt(f.bet, fullKo),
-      walkAwayPayout: currentWalkAwayPayout(f),
+      walkAwayPayout: walk.total,
+      walkAwayRefund: walk.refund,
+      walkAwayFromEarned: walk.fromEarned,
+      walkAwayRefundPercent: m.walkAwayRefundMilli / 10,
       walkAwayKeep: m.walkAwayKeepMilli / MILLI,
       lossRefund: lossPayoutAt(f.bet, m.lossRefundMilli),
       canWalkAway: active && canWalkAway(f),
       canRoll: active,
+      startTriggers: f.startTriggers,
       exchanges: f.exchanges,
     }
   }
@@ -398,9 +397,9 @@ class GameImpl implements Game {
     const inFight = s.phase === 'bet' || s.phase === 'fight' || s.phase === 'result'
     const boss = inFight && this.currentFightIsBoss()
     const betting = s.phase === 'bet' && s.bankroll >= 1
-    const pawn = skipPawnValue(s.buyIn)
-    const offers: ShopOffer[] = s.shopOffers.map((id) => ({ ...getUpgrade(id, s.buyIn), owned: countOwned(s.upgrades, id) }))
+    const offers: ShopOffer[] = s.shopOffers.map((id) => ({ ...getUpgrade(id), owned: countOwned(s.upgrades, id) }))
     return {
+      rulesVersion: RULES_VERSION,
       seed: s.seed,
       buyIn: s.buyIn,
       tick: s.tick,
@@ -412,6 +411,8 @@ class GameImpl implements Game {
       betPresets: this.betPresets(),
       canBet: betting,
       stage: s.stage,
+      level: s.stage,
+      levelInfo: levelInfo(s.stage),
       fightInStage: s.fightInStage,
       fightNumberInStage: Math.min(s.fightInStage + 1, CONFIG.fightsPerStage),
       fightsPerStage: CONFIG.fightsPerStage,
@@ -422,11 +423,8 @@ class GameImpl implements Game {
       fightsCompleted: s.fightsCompleted,
       stagesCleared: s.stagesCleared,
       bossesDefeated: s.bossesDefeated,
-      upgrades: s.upgrades.map((id) => getUpgrade(id, s.buyIn)),
+      upgrades: s.upgrades.map((id) => getUpgrade(id)),
       shopOffers: offers,
-      skipCoins: pawn,
-      pawnValue: pawn,
-      canPawn: this.canPawn(),
       canLeave: s.phase === 'checkpoint',
       lastResult: s.lastResult,
       lastCheckpoint: s.lastCheckpoint,
@@ -447,21 +445,38 @@ export function createGame(seed: number, buyIn: number = CONFIG.defaultBuyIn): G
   return new GameImpl(seed, buyIn)
 }
 
-export function replay(seed: number, buyIn: number, log: ReadonlyArray<LogEntry>, totalTicks?: number): GameState {
+export function createGameFromLog(
+  seed: number,
+  buyIn: number,
+  log: ReadonlyArray<LogEntry>,
+  totalTicks?: number,
+): Game {
   const game = createGame(seed, buyIn)
   const last = log.length > 0 ? (log[log.length - 1] as LogEntry).tick : 0
   const end = totalTicks ?? last
-  let i = 0
+  let prev = 0
+  for (let i = 0; i < log.length; i++) {
+    const t = (log[i] as LogEntry).tick
+    if (!Number.isSafeInteger(t) || t < prev) throw new Error(`log entry ${i} is out of tick order`)
+    prev = t
+  }
   let now = 0
-  for (;;) {
-    while (i < log.length && (log[i] as LogEntry).tick <= now) {
-      const entry = log[i] as LogEntry
-      if (entry.tick === now) game.dispatch(entry.action)
-      i++
+  for (let i = 0; i < log.length; i++) {
+    const entry = log[i] as LogEntry
+    if (entry.tick > end) break
+    while (now < entry.tick) {
+      game.tick()
+      now++
     }
-    if (now >= end) break
+    if (!game.dispatch(entry.action)) throw new Error(`log entry ${i} (${entry.action.type}) was rejected`)
+  }
+  while (now < end) {
     game.tick()
     now++
   }
-  return game.state
+  return game
+}
+
+export function replay(seed: number, buyIn: number, log: ReadonlyArray<LogEntry>, totalTicks?: number): GameState {
+  return createGameFromLog(seed, buyIn, log, totalTicks).state
 }

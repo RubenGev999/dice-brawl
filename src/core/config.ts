@@ -1,6 +1,23 @@
+import type { Archetype } from './types.ts'
+
 export const TICKS_PER_SECOND = 60
 
 export const MILLI = 1000
+
+export const RULES_VERSION = '2.0.0-levels'
+
+export interface LevelDef {
+  readonly label: string
+  readonly fullKoMilli: number
+  readonly koBonusMilli: number
+  readonly bossFullKoMilli: number
+  readonly bossKoBonusMilli: number
+  readonly targetGrowthPercent: number
+  readonly enemyBonusMilli: number
+  readonly bossBonusMilli: number
+  readonly enemyHpBonus: number
+  readonly plainWeight: number
+}
 
 export const CONFIG = {
   minBuyIn: 100,
@@ -14,39 +31,35 @@ export const CONFIG = {
   bossMaxBetPercent: 100,
   betPresetPercents: { low: 10, medium: 25, high: 50 },
 
-  targetGrowthPercent: 7,
-  targetGrowthPerStagePercent: 0,
-  targetFloorFirstPermilleOfBuyIn: 0,
-  targetFloorGrowthPercent: 115,
-
-  skipPawnPermilleOfBuyIn: 10,
-
   failedCheckpointFeePercent: 10,
 
   playerBaseHp: 10,
   playerBaseDice: [6, 6] as readonly number[],
   playerBaseBonus: 0,
 
-  fullKoMultiplierMilli: 1400,
-  koBonusMilli: 200,
-  bossFullKoMultiplierMilli: 2000,
-  bossKoBonusMilli: 500,
+  walkAwayRefundMilli: 300,
   walkAwayKeepMilli: 500,
   critFactor: 2,
 
+  levels: [
+    { label: 'Easy', fullKoMilli: 1400, koBonusMilli: 200, bossFullKoMilli: 2000, bossKoBonusMilli: 500, targetGrowthPercent: 4, enemyBonusMilli: -370, bossBonusMilli: 270, enemyHpBonus: 0, plainWeight: 6 },
+    { label: 'Normal', fullKoMilli: 1500, koBonusMilli: 200, bossFullKoMilli: 2100, bossKoBonusMilli: 600, targetGrowthPercent: 4, enemyBonusMilli: 1060, bossBonusMilli: 210, enemyHpBonus: 1, plainWeight: 4 },
+    { label: 'Tricky', fullKoMilli: 1600, koBonusMilli: 200, bossFullKoMilli: 2200, bossKoBonusMilli: 700, targetGrowthPercent: 4, enemyBonusMilli: 2240, bossBonusMilli: 120, enemyHpBonus: 2, plainWeight: 3 },
+    { label: 'Hard', fullKoMilli: 1700, koBonusMilli: 200, bossFullKoMilli: 2300, bossKoBonusMilli: 800, targetGrowthPercent: 5, enemyBonusMilli: 3380, bossBonusMilli: 0, enemyHpBonus: 2, plainWeight: 2 },
+    { label: 'Brutal', fullKoMilli: 1800, koBonusMilli: 200, bossFullKoMilli: 2400, bossKoBonusMilli: 900, targetGrowthPercent: 5, enemyBonusMilli: 4380, bossBonusMilli: -330, enemyHpBonus: 3, plainWeight: 2 },
+    { label: 'Savage', fullKoMilli: 1900, koBonusMilli: 200, bossFullKoMilli: 2500, bossKoBonusMilli: 1000, targetGrowthPercent: 6, enemyBonusMilli: 5400, bossBonusMilli: -640, enemyHpBonus: 3, plainWeight: 1 },
+    { label: 'Nightmare', fullKoMilli: 2000, koBonusMilli: 200, bossFullKoMilli: 2600, bossKoBonusMilli: 1100, targetGrowthPercent: 6, enemyBonusMilli: 5460, bossBonusMilli: -760, enemyHpBonus: 4, plainWeight: 1 },
+    { label: 'Abyss', fullKoMilli: 2100, koBonusMilli: 200, bossFullKoMilli: 2700, bossKoBonusMilli: 1200, targetGrowthPercent: 7, enemyBonusMilli: 5540, bossBonusMilli: -760, enemyHpBonus: 4, plainWeight: 1 },
+  ] as ReadonlyArray<LevelDef>,
+  levelOverflowBonusMilli: 400,
+  levelOverflowHpEvery: 2,
+
   enemyDice: [6, 6] as readonly number[],
   enemyBaseHp: 8,
-  enemyHpPerFightMilli: 150,
   enemyHpSpread: 2,
-  enemyBaseBonusMilli: -540,
-  enemyBonusPerFightMilli: 303,
-  enemyBonusCurveMicro: 3950,
-  enemyBonusRampFights: 23,
-  enemyBonusLatePerFightMilli: 0,
+  enemyBonusStepMilli: 250,
   enemyMinHp: 3,
   bossExtraHp: 4,
-  bossBonusMilli: 100,
-  bossBonusPerStageMilli: -50,
 
   enemyNames: [
     'Goblin',
@@ -59,6 +72,16 @@ export const CONFIG = {
     'Wolf',
     'Troll',
     'Ghoul',
+    'Kobold',
+    'Giant Spider',
+    'Mummy',
+    'Ooze',
+    'Mud Golem',
+    'Necromancer',
+    'Harpy',
+    'Gargoyle',
+    'Imp',
+    'Will-o-Wisp',
   ] as readonly string[],
   bossNames: [
     'Goblin Warlord',
@@ -69,21 +92,70 @@ export const CONFIG = {
     'Witch of Ash',
     'Dread Knight',
     'Ogre Chieftain',
+    'Lich Queen',
+    'Stone Colossus',
+    'Gelatinous King',
+    'Vampire Lord',
+    'Ember Drake',
+    'The Plague Herald',
   ] as readonly string[],
+  archetypes: {
+    Goblin: 'humanoid',
+    'Rat King': 'beast',
+    Bandit: 'humanoid',
+    Skeleton: 'skeleton',
+    Slime: 'blob',
+    Orc: 'humanoid',
+    Cultist: 'caster',
+    Wolf: 'beast',
+    Troll: 'golem',
+    Ghoul: 'humanoid',
+    Kobold: 'humanoid',
+    'Giant Spider': 'beast',
+    Mummy: 'skeleton',
+    Ooze: 'blob',
+    'Mud Golem': 'golem',
+    Necromancer: 'caster',
+    Harpy: 'beast',
+    Gargoyle: 'golem',
+    Imp: 'other',
+    'Will-o-Wisp': 'other',
+    'Goblin Warlord': 'humanoid',
+    'Bone Tyrant': 'skeleton',
+    'The Hollow King': 'skeleton',
+    'Mire Hydra': 'beast',
+    'Iron Golem': 'golem',
+    'Witch of Ash': 'caster',
+    'Dread Knight': 'humanoid',
+    'Ogre Chieftain': 'humanoid',
+    'Lich Queen': 'caster',
+    'Stone Colossus': 'golem',
+    'Gelatinous King': 'blob',
+    'Vampire Lord': 'humanoid',
+    'Ember Drake': 'beast',
+    'The Plague Herald': 'other',
+  } as Readonly<Record<string, Archetype>>,
   enemyTraitWeights: {
-    plain: 4,
     tough: 2,
     brute: 2,
     armored: 1,
     savage: 1,
     vicious: 1,
     lucky: 1,
+    frenzied: 1,
+    leech: 1,
+    thorny: 1,
+    cursed: 1,
   },
   bossTraitWeights: {
     enrage: 1,
     regenerate: 1,
     ironhide: 1,
     executioner: 1,
+    colossus: 1,
+    mighty: 1,
+    vampiric: 1,
+    crusher: 1,
   },
   traitToughHpPercent: 130,
   traitBruteBonus: 1,
@@ -91,10 +163,18 @@ export const CONFIG = {
   traitSavageCritFactor: 3,
   traitViciousDamage: 1,
   traitLuckyTieDamage: 1,
+  traitFrenziedBonus: 1,
+  traitLeechHeal: 1,
+  traitThornDamage: 1,
+  traitCursedMaxFace: 5,
   bossEnrageBonus: 1,
   bossRegenerateHp: 1,
   bossIronhideReduction: 2,
   bossExecutionerDamage: 2,
+  bossColossusHpPercent: 140,
+  bossMightyBonus: 1,
+  bossVampiricHeal: 2,
+  bossCrusherCritFactor: 3,
 
   upgradeEffects: {
     weightedDiceMinFaceStep: 1,
@@ -102,12 +182,20 @@ export const CONFIG = {
     secondWindRerolls: 1,
     vitalityHp: 3,
     shieldBlockAmount: 4,
-    loadedDiceCritTotal: 10,
-    insuranceRefundMilli: 200,
+    loadedDiceCritTotal: 9,
+    escapeRopeRefundMilli: 200,
+    insuranceRefundMilli: 250,
     finisherKoBonusMilli: 300,
     intimidateEnemyHpPercent: 20,
-    vampireHeal: 3,
+    vampireHeal: 6,
     thickSkinReduction: 1,
+    tieBreakerDamage: 2,
+    ironGuardCritStep: 1,
+    comboEvery: 2,
+    comboCritFactor: 3,
+    riposteMargin: 3,
+    riposteDamage: 1,
+    bloodlustDamage: 2,
   },
   upgradeMaxCopies: {
     weightedDice: 1,
@@ -117,11 +205,17 @@ export const CONFIG = {
     shield: 2,
     loadedDice: 1,
     escapeRope: 1,
-    insurance: 2,
+    insurance: 1,
     finisher: 3,
     intimidate: 2,
     vampire: 1,
     thickSkin: 2,
+    tieBreaker: 1,
+    firstBlood: 1,
+    ironGuard: 1,
+    combo: 1,
+    riposte: 1,
+    bloodlust: 1,
   },
 
   shopOfferCount: 3,

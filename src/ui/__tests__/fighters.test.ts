@@ -1,39 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { BOSS_TRAITS, CONFIG, NORMAL_TRAITS } from '../../core/index.ts'
-import type { EnemyTraitId, ExchangeRecord } from '../../core/index.ts'
-import { HERO, ROSTER, TEMPLATES, TIMELINE, characterFor, characterSvg, planExchange, rollChip, traitMarks } from '../fighters.ts'
+import { BOSS_TRAITS, CONFIG, NORMAL_TRAITS, archetypeOf } from '../../core/index.ts'
+import type { Archetype, EnemyTraitId } from '../../core/index.ts'
+import { exchange as ex } from './fixtures.ts'
+import { HERO, ROSTER, TEMPLATES, TIMELINE, characterFor, characterSvg, planExchange, rollChip, templateFor, traitMarks } from '../fighters.ts'
 import type { PlanStep } from '../fighters.ts'
 
 const ALL_TRAITS: ReadonlyArray<EnemyTraitId> = [...NORMAL_TRAITS, ...BOSS_TRAITS]
-
-function ex(over: Partial<ExchangeRecord> = {}): ExchangeRecord {
-  return {
-    index: 0,
-    playerFaces: [4, 3],
-    playerFacesBeforeReroll: null,
-    rerolled: false,
-    enemyFaces: [2, 1],
-    playerTotal: 7,
-    enemyTotal: 3,
-    winner: 'player',
-    playerCrit: false,
-    enemyCrit: false,
-    playerCritFactor: 1,
-    enemyCritFactor: 1,
-    damageDealt: 4,
-    damageTaken: 0,
-    blocked: 0,
-    healed: 0,
-    enemyHealed: 0,
-    escaped: false,
-    playerHpAfter: 10,
-    enemyHpAfter: 5,
-    multiplierGained: 0.1,
-    multiplierGainedMilli: 100,
-    multiplierAfterMilli: 100,
-    ...over,
-  }
-}
 
 function step<K extends PlanStep['kind']>(plan: PlanStep[], kind: K): Extract<PlanStep, { kind: K }> {
   const found = plan.find((s) => s.kind === kind)
@@ -44,14 +16,12 @@ function step<K extends PlanStep['kind']>(plan: PlanStep[], kind: K): Extract<Pl
 describe('character roster', () => {
   it('covers every normal and boss name from the core config', () => {
     for (const name of CONFIG.enemyNames) {
-      expect(ROSTER[name], name).toBeDefined()
-      const spec = characterFor(name, false)
+      const spec = characterFor(name, false, archetypeOf(name))
       expect(spec.name).toBe(name)
       expect(spec.boss).toBe(false)
     }
     for (const name of CONFIG.bossNames) {
-      expect(ROSTER[name], name).toBeDefined()
-      const spec = characterFor(name, true)
+      const spec = characterFor(name, true, archetypeOf(name))
       expect(spec.name).toBe(name)
       expect(spec.boss).toBe(true)
     }
@@ -60,14 +30,40 @@ describe('character roster', () => {
   it('gives every name its own look', () => {
     const looks = new Set<string>()
     for (const name of [...CONFIG.enemyNames, ...CONFIG.bossNames]) {
-      const s = characterFor(name, CONFIG.bossNames.includes(name))
+      const s = characterFor(name, CONFIG.bossNames.includes(name), archetypeOf(name))
       looks.add(JSON.stringify([s.template, s.palette, s.accessories]))
     }
     expect(looks.size).toBe(CONFIG.enemyNames.length + CONFIG.bossNames.length)
   })
 
+  it('draws every core name with the template of its archetype', () => {
+    const names: ReadonlyArray<readonly [string, boolean]> = [...CONFIG.enemyNames.map((n) => [n, false] as const), ...CONFIG.bossNames.map((n) => [n, true] as const)]
+    expect(names.length).toBe(34)
+    let others = 0
+    for (const [name, boss] of names) {
+      const archetype: Archetype = archetypeOf(name)
+      const spec = characterFor(name, boss, archetype)
+      if (archetype === 'other') {
+        others += 1
+        expect(TEMPLATES, name).toContain(spec.template)
+        expect(spec.template, name).toBe(templateFor('other', name))
+      } else {
+        expect(spec.template, name).toBe(archetype)
+      }
+    }
+    expect(others).toBeGreaterThan(0)
+  })
+
+  it('uses the archetype instead of the name when the archetype is known', () => {
+    expect(characterFor('Unseen Thing', false, 'blob').template).toBe('blob')
+    expect(characterFor('Unseen Thing', true, 'caster').template).toBe('caster')
+    expect(characterFor('Unseen Thing', false, 'golem').template).toBe('golem')
+    expect(characterFor('Unseen Thing', false, 'other').template).toBe(templateFor('other', 'Unseen Thing'))
+    expect(characterFor('Goblin', false, 'beast').template).toBe('beast')
+  })
+
   it('uses only known templates and uses every template at least once', () => {
-    const used = new Set(Object.values(ROSTER).map((s) => s.template))
+    const used = new Set([...CONFIG.enemyNames, ...CONFIG.bossNames].map((n) => characterFor(n, CONFIG.bossNames.includes(n), archetypeOf(n)).template))
     for (const t of used) expect(TEMPLATES).toContain(t)
     expect(used.size).toBe(TEMPLATES.length)
   })
@@ -95,8 +91,8 @@ describe('character roster', () => {
   })
 
   it('makes boss specs differ from normal ones', () => {
-    const normals = CONFIG.enemyNames.map((n) => characterFor(n, false))
-    const bosses = CONFIG.bossNames.map((n) => characterFor(n, true))
+    const normals = CONFIG.enemyNames.map((n) => characterFor(n, false, archetypeOf(n)))
+    const bosses = CONFIG.bossNames.map((n) => characterFor(n, true, archetypeOf(n)))
     const normalBodies = new Set(normals.map((s) => s.palette.body))
     for (const b of bosses) {
       expect(normalBodies.has(b.palette.body), b.name).toBe(false)
@@ -108,7 +104,7 @@ describe('character roster', () => {
   })
 
   it('builds clean, non-empty svg for every character and trait', () => {
-    const specs = [HERO, ...Object.values(ROSTER), characterFor('Unknown Thing'), characterFor('Unknown Thing', true)]
+    const specs = [HERO, ...Object.values(ROSTER), characterFor('Unknown Thing'), characterFor('Unknown Thing', true), ...CONFIG.enemyNames.map((n) => characterFor(n, false, archetypeOf(n)))]
     for (const spec of specs) {
       for (const trait of ALL_TRAITS) {
         const svg = characterSvg(spec, trait)
@@ -133,6 +129,19 @@ describe('character roster', () => {
     expect(characterSvg(spec, 'armored')).not.toBe(characterSvg(spec, 'plain'))
     expect(characterSvg(spec, 'regenerate')).toContain('glow-regen')
     expect(characterSvg(spec, 'enrage')).toContain('rage-aura')
+  })
+
+  it('gives every trait a mark and draws every new trait differently from plain', () => {
+    const newTraits: ReadonlyArray<EnemyTraitId> = ['frenzied', 'leech', 'thorny', 'cursed', 'colossus', 'mighty', 'vampiric', 'crusher']
+    for (const t of newTraits) expect(traitMarks(t).length, t).toBeGreaterThan(0)
+    for (const t of ALL_TRAITS) if (t !== 'plain') expect(traitMarks(t).length, t).toBeGreaterThan(0)
+    for (const template of TEMPLATES) {
+      const base = characterFor('Probe', false, template)
+      const plain = characterSvg(base, 'plain')
+      for (const t of newTraits) expect(characterSvg(base, t), `${template} ${t}`).not.toBe(plain)
+    }
+    const marks = newTraits.map((t) => traitMarks(t).join(','))
+    expect(new Set(marks).size).toBe(newTraits.length)
   })
 
   it('draws the hero as its own fixed character', () => {
@@ -225,27 +234,66 @@ describe('exchange animation plan', () => {
     expect(ko.side).toBe('enemy')
     expect(ko.at).toBeGreaterThan(step(plan, 'impact').at)
     expect(ko.at).toBeLessThan(TIMELINE.totalMs)
-    expect(plan.some((s) => s.kind === 'dash')).toBe(false)
   })
 
   it('knocks out the player when the fight is lost', () => {
     const plan = planExchange(ex({ winner: 'enemy', damageDealt: 0, damageTaken: 10 }), 'lost')
     expect(step(plan, 'ko').side).toBe('player')
-    expect(plan.some((s) => s.kind === 'dash')).toBe(false)
   })
 
-  it('sends the hero dashing off when they escape', () => {
-    const plan = planExchange(ex({ winner: 'enemy', damageDealt: 0, damageTaken: 10, escaped: true }), 'escaped')
-    expect(step(plan, 'dash').side).toBe('player')
-    expect(plan.some((s) => s.kind === 'ko')).toBe(false)
-    expect(step(plan, 'impact').floats.map((f) => f.text)).toContain('Escaped!')
-    const byFlag = planExchange(ex({ escaped: true }), 'active')
-    expect(byFlag.some((s) => s.kind === 'dash')).toBe(true)
+  it('plays a riposte as an enemy hit followed by a small counter-hit', () => {
+    const plan = planExchange(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 3, enemyHpAfter: 5 }), 'active')
+    const impacts = plan.filter((p) => p.kind === 'impact')
+    expect(impacts).toHaveLength(2)
+    const [first, counter] = impacts as Array<Extract<PlanStep, { kind: 'impact' }>>
+    expect(first?.hit).toEqual(['player'])
+    expect(first?.floats).toEqual([{ target: 'player', text: '-3', sub: null, tone: 'hit' }])
+    expect(counter?.hit).toEqual(['enemy'])
+    expect(counter?.floats).toEqual([{ target: 'enemy', text: '-1', sub: 'Riposte', tone: 'hit' }])
+    expect(counter!.at).toBeGreaterThan(first!.at)
+    expect(counter!.at).toBeLessThan(TIMELINE.endAt)
+    const lunges = plan.filter((p) => p.kind === 'lunge')
+    expect(lunges.map((l) => l.sides)).toEqual([['enemy'], ['player']])
+    const times = plan.map((p) => p.at)
+    expect([...times].sort((x, y) => x - y)).toEqual(times)
+  })
+
+  it('does not give the enemy hit of a riposte exchange the player crit label', () => {
+    const plan = planExchange(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 3, playerCritFactor: 1 }), 'active')
+    const first = plan.find((p) => p.kind === 'impact') as Extract<PlanStep, { kind: 'impact' }>
+    expect(first.crit).toBe(false)
+  })
+
+  it('keeps the counter-hit inside a fast timeline and ends with a knockout when the riposte kills', () => {
+    const fast = { windupAt: 0, lungeAt: 108, impactAt: 162, endAt: 252, totalMs: 450 }
+    const plan = planExchange(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 3, enemyHpAfter: 0 }), 'won', fast)
+    const counter = plan.filter((p) => p.kind === 'impact')[1]
+    expect(counter!.at).toBeGreaterThan(fast.impactAt)
+    expect(counter!.at).toBeLessThan(fast.endAt)
+    expect(step(plan, 'ko').side).toBe('enemy')
+  })
+
+  it('shows thorn damage on the player and tie breaker hits without a crit', () => {
+    const thorn = step(planExchange(ex({ thornDamage: 1 }), 'active'), 'impact')
+    expect(thorn.hit).toEqual(['enemy', 'player'])
+    expect(thorn.floats).toContainEqual({ target: 'player', text: '-1', sub: 'Thorns', tone: 'hit' })
+    const tb = step(planExchange(ex({ tieBreak: true, damageDealt: 2, playerTotal: 5, enemyTotal: 5 }), 'active'), 'impact')
+    expect(tb.floats).toEqual([{ target: 'enemy', text: '-2', sub: 'Tie Breaker', tone: 'hit' }])
+    expect(tb.crit).toBe(false)
+  })
+
+  it('labels combo, first blood and loaded dice crits', () => {
+    const combo = step(planExchange(ex({ playerCrit: true, playerCritFactor: 3, playerCritSource: 'combo', damageDealt: 12 }), 'active'), 'impact')
+    expect(combo.floats[0]?.sub).toBe('COMBO x3')
+    const fb = step(planExchange(ex({ playerCrit: true, playerCritFactor: 2, playerCritSource: 'firstBlood', damageDealt: 8 }), 'active'), 'impact')
+    expect(fb.floats[0]?.sub).toBe('FIRST BLOOD x2')
+    const loaded = step(planExchange(ex({ playerCrit: true, playerCritFactor: 2, playerCritSource: 'loadedDice', damageDealt: 8 }), 'active'), 'impact')
+    expect(loaded.floats[0]?.sub).toBe('LOADED CRIT x2')
   })
 
   it('never plays a knockout for an active fight', () => {
     const plan = planExchange(ex(), 'active')
-    expect(plan.some((s) => s.kind === 'ko' || s.kind === 'dash')).toBe(false)
+    expect(plan.some((s) => s.kind === 'ko')).toBe(false)
   })
 
   it('keeps the whole timeline near the old 1.2 s', () => {
@@ -270,6 +318,12 @@ describe('roll chip', () => {
   it('omits a zero bonus and shows a negative one', () => {
     expect(rollChip([4, 3], null, 7).text).toBe('4 + 3 = 7')
     expect(rollChip([4, 3], null, 6).text).toBe('4 + 3 - 1 = 6')
+  })
+
+  it('uses the applied bonus from the exchange when given', () => {
+    expect(rollChip([4, 3], null, 8, 1).text).toBe('4 + 3 + 1 = 8')
+    expect(rollChip([4, 3], null, 7, 0).text).toBe('4 + 3 = 7')
+    expect(rollChip([4, 3], null, 9, 2).bonus).toBe(2)
   })
 
   it('marks the rerolled die', () => {

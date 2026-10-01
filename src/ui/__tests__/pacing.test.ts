@@ -4,34 +4,10 @@ import type { Timeline } from '../fighters.ts'
 import type { ExchangeRecord } from '../../core/index.ts'
 import { animFrame, countDuration, easeOutCubic, fxFactor, impactGate, retarget, shouldTick, skipClock, tweenAt, tweenValue } from '../pacing.ts'
 import type { AnimClock } from '../pacing.ts'
+import { exchange } from './fixtures.ts'
 
 function record(over: Partial<ExchangeRecord> = {}): ExchangeRecord {
-  return {
-    index: 0,
-    playerFaces: [4, 3],
-    playerFacesBeforeReroll: null,
-    rerolled: false,
-    enemyFaces: [2, 1],
-    playerTotal: 7,
-    enemyTotal: 3,
-    winner: 'player',
-    playerCrit: false,
-    enemyCrit: false,
-    playerCritFactor: 1,
-    enemyCritFactor: 1,
-    damageDealt: 4,
-    damageTaken: 0,
-    blocked: 0,
-    healed: 0,
-    enemyHealed: 0,
-    escaped: false,
-    playerHpAfter: 10,
-    enemyHpAfter: 4,
-    multiplierGained: 0.5,
-    multiplierGainedMilli: 500,
-    multiplierAfterMilli: 500,
-    ...over,
-  }
+  return exchange({ enemyHpAfter: 4, multiplierGained: 0.5, multiplierGainedMilli: 500, multiplierAfterMilli: 500, ...over })
 }
 
 function clock(timeline: Timeline, start = 1000, skipped = false): AnimClock {

@@ -1,9 +1,10 @@
-import { CONFIG, createGame, hashString } from '../core/index.ts'
+import { CONFIG, RULES_VERSION, createGameFromLog, hashString } from '../core/index.ts'
 import type { Action, Game, LogEntry, Phase } from '../core/index.ts'
 import type { StorageLike } from './wallet.ts'
 
-export const RUN_KEY = 'diceBrawl.run.v1'
-export const RUN_VERSION = 1
+export const RUN_KEY = 'diceBrawl.run.v2'
+export const LEGACY_RUN_KEY = 'diceBrawl.run.v1'
+export const RUN_VERSION = 2
 export const MAX_RESUME_TICKS = 20_000_000
 export const MAX_LOG_ENTRIES = 20_000
 
@@ -20,6 +21,7 @@ export interface RunCheck {
 
 export interface RunRecord {
   readonly v: number
+  readonly rules: string
   readonly id: string
   readonly seed: number
   readonly buyIn: number
@@ -46,6 +48,7 @@ export function snapshotRecord(id: string, game: Game): RunRecord {
   const s = game.state
   return {
     v: RUN_VERSION,
+    rules: s.rulesVersion,
     id,
     seed: s.seed,
     buyIn: s.buyIn,
@@ -89,8 +92,6 @@ export function parseAction(raw: unknown): Action | null {
       return typeof a.amount === 'number' && Number.isFinite(a.amount) ? { type: 'bet', amount: a.amount } : null
     case 'pickUpgrade':
       return isInt(a.index) ? { type: 'pickUpgrade', index: a.index } : null
-    case 'pawn':
-      return isInt(a.index) ? { type: 'pawn', index: a.index } : null
     case 'roll':
     case 'walkAway':
     case 'continue':
@@ -107,7 +108,7 @@ const PHASES: ReadonlyArray<string> = ['bet', 'fight', 'result', 'checkpoint', '
 export function parseRecord(raw: unknown): RunRecord | null {
   if (typeof raw !== 'object' || raw === null) return null
   const r = raw as Record<string, unknown>
-  if (r.v !== RUN_VERSION || typeof r.id !== 'string' || r.id === '' || typeof r.cfg !== 'string') return null
+  if (r.v !== RUN_VERSION || typeof r.rules !== 'string' || typeof r.id !== 'string' || r.id === '' || typeof r.cfg !== 'string') return null
   if (!isInt(r.seed) || !isInt(r.buyIn, 1) || !isInt(r.tick)) return null
   if (!Array.isArray(r.log) || r.log.length > MAX_LOG_ENTRIES) return null
   const log: LogEntry[] = []
@@ -127,6 +128,7 @@ export function parseRecord(raw: unknown): RunRecord | null {
   if (!isInt(c.bankroll) || !isInt(c.fightsCompleted) || !isInt(c.stage, 1)) return null
   return {
     v: RUN_VERSION,
+    rules: r.rules,
     id: r.id,
     seed: r.seed,
     buyIn: r.buyIn,
@@ -158,27 +160,12 @@ export function loadRun(storage: RunStorage | null): LoadResult {
 }
 
 export function rebuildGame(record: RunRecord): Game | null {
+  if (record.rules !== RULES_VERSION) return null
   if (record.cfg !== configFingerprint()) return null
   if (record.tick > MAX_RESUME_TICKS) return null
   let game: Game
   try {
-    game = createGame(record.seed, record.buyIn)
-  } catch {
-    return null
-  }
-  let now = 0
-  try {
-    for (const entry of record.log) {
-      while (now < entry.tick) {
-        game.tick()
-        now += 1
-      }
-      if (!game.dispatch(entry.action)) return null
-    }
-    while (now < record.tick) {
-      game.tick()
-      now += 1
-    }
+    game = createGameFromLog(record.seed, record.buyIn, record.log, record.tick)
   } catch {
     return null
   }
@@ -222,9 +209,46 @@ export function discardStored(storage: RunStorage | null, wallet: WalletPort, bu
   return { kind: 'discarded', refunded: null, note: 'A saved run could not be restored and was discarded.' }
 }
 
+function readLegacy(storage: RunStorage | null): { readonly id: string | undefined; readonly buyIn: number | null } | null {
+  let raw: string | null
+  try {
+    raw = storage ? storage.getItem(LEGACY_RUN_KEY) : null
+  } catch {
+    return null
+  }
+  if (raw === null || raw === '') return null
+  let id: string | undefined
+  let buyIn: number | null = null
+  try {
+    const data: unknown = JSON.parse(raw)
+    if (typeof data === 'object' && data !== null) {
+      const r = data as Record<string, unknown>
+      if (typeof r.id === 'string' && r.id !== '') id = r.id
+      if (isInt(r.buyIn, CONFIG.minBuyIn)) buyIn = r.buyIn
+    }
+  } catch {
+    buyIn = null
+  }
+  return { id, buyIn }
+}
+
+function dropLegacy(storage: RunStorage | null): void {
+  try {
+    if (storage && typeof storage.removeItem === 'function') storage.removeItem(LEGACY_RUN_KEY)
+    else if (storage) storage.setItem(LEGACY_RUN_KEY, '')
+  } catch {
+    return
+  }
+}
+
 export function resumeStored(storage: RunStorage | null, wallet: WalletPort): ResumeOutcome {
   const loaded = loadRun(storage)
-  if (loaded.kind === 'none') return { kind: 'none' }
+  if (loaded.kind === 'none') {
+    const legacy = readLegacy(storage)
+    if (!legacy) return { kind: 'none' }
+    dropLegacy(storage)
+    return discardStored(storage, wallet, legacy.buyIn, legacy.id)
+  }
   if (loaded.kind === 'corrupt') return discardStored(storage, wallet, loaded.buyIn)
   const game = rebuildGame(loaded.record)
   if (!game) return discardStored(storage, wallet, loaded.record.buyIn, loaded.record.id)

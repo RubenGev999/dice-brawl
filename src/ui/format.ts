@@ -1,3 +1,4 @@
+import { levelDef } from '../core/index.ts'
 import type {
   BetPreset,
   CheckpointResult,
@@ -5,8 +6,10 @@ import type {
   ExchangeRecord,
   FightOutcome,
   FightResult,
+  FightState,
   GameOverReason,
   GameState,
+  LevelInfo,
   PlayerFightState,
   ShopOffer,
   Upgrade,
@@ -76,19 +79,37 @@ export function hpPercent(hp: number, maxHp: number): number {
   return Math.max(0, Math.min(100, (hp / maxHp) * 100))
 }
 
-export function critText(ex: Pick<ExchangeRecord, 'playerCritFactor' | 'enemyCritFactor'>): string | null {
-  if (ex.playerCritFactor > 1) return `CRIT x${ex.playerCritFactor}`
+export function critText(ex: Pick<ExchangeRecord, 'playerCritFactor' | 'enemyCritFactor'> & Partial<Pick<ExchangeRecord, 'playerCritSource'>>): string | null {
+  if (ex.playerCritFactor > 1) {
+    const f = ex.playerCritFactor
+    switch (ex.playerCritSource) {
+      case 'combo':
+        return `COMBO x${f}`
+      case 'firstBlood':
+        return `FIRST BLOOD x${f}`
+      case 'loadedDice':
+        return `LOADED CRIT x${f}`
+      case 'doubles':
+      case null:
+      case undefined:
+        return `CRIT x${f}`
+    }
+  }
   if (ex.enemyCritFactor > 1) return `CRIT x${ex.enemyCritFactor}`
   return null
+}
+
+export function isRiposte(ex: Pick<ExchangeRecord, 'winner' | 'riposteDamage'>): boolean {
+  return ex.winner === 'enemy' && ex.riposteDamage > 0
 }
 
 export function exchangeOutcome(ex: ExchangeRecord): string {
   const parts: string[] = []
   const crit = critText(ex)
-  if (ex.escaped) {
-    parts.push('Escape Rope! You slip away')
-  } else if (ex.winner === 'tie') {
+  if (ex.winner === 'tie') {
     parts.push('Tie')
+  } else if (ex.winner === 'player' && ex.tieBreak) {
+    parts.push(`Tie Breaker hits for ${ex.damageDealt}`)
   } else if (ex.winner === 'player') {
     let text = (crit ? crit + '! ' : '') + `You hit for ${ex.damageDealt}`
     if (ex.healed > 0) text += ` (+${ex.healed} HP)`
@@ -100,12 +121,15 @@ export function exchangeOutcome(ex: ExchangeRecord): string {
     if (ex.blocked > 0) text += ` (${ex.blocked} blocked)`
     parts.push(text)
   }
+  if (isRiposte(ex)) parts.push(`Riposte hits for ${ex.riposteDamage}`)
+  if (ex.thornDamage > 0) parts.push(`Thorns hurt you for ${ex.thornDamage}`)
   if (ex.enemyHealed > 0) parts.push(`Enemy heals ${ex.enemyHealed}`)
+  if (ex.cursedClamps > 0) parts.push(ex.cursedClamps === 1 ? 'Cursed: a 6 counts as 5' : `Cursed: ${ex.cursedClamps} sixes count as 5`)
   return parts.join(' | ')
 }
 
 export function exchangeTone(ex: ExchangeRecord): 'good' | 'bad' | 'neutral' {
-  if (ex.escaped || ex.winner === 'player') return 'good'
+  if (ex.winner === 'player') return 'good'
   if (ex.winner === 'enemy' && ex.damageTaken > 0) return 'bad'
   return 'neutral'
 }
@@ -124,11 +148,11 @@ export function enemyTraitLine(enemy: Pick<EnemyState, 'traitText' | 'bonus' | '
   return enemy.traitText
 }
 
-export function chargesText(p: Pick<PlayerFightState, 'shieldsLeft' | 'rerollsLeft' | 'hasEscapeRope'>): string {
+export function chargesText(p: Pick<PlayerFightState, 'shieldsLeft' | 'rerollsLeft'> & Partial<Pick<PlayerFightState, 'maxFace'>>): string {
   const out: string[] = []
   if (p.shieldsLeft > 0) out.push(`Shield x${p.shieldsLeft}`)
   if (p.rerollsLeft > 0) out.push(`Reroll x${p.rerollsLeft}`)
-  if (p.hasEscapeRope) out.push('Escape Rope ready')
+  if (p.maxFace !== undefined && p.maxFace < 6) out.push(`Cursed: max face ${p.maxFace}`)
   return out.length > 0 ? out.join(' | ') : 'No charges'
 }
 
@@ -140,14 +164,7 @@ export function fightTitle(outcome: FightOutcome, isBoss = false): string {
       return isBoss ? 'The boss wins' : 'Knocked out'
     case 'walkedAway':
       return 'Walked away'
-    case 'escaped':
-      return 'Escaped!'
   }
-}
-
-export function fightMessage(outcome: FightOutcome): string | null {
-  if (outcome === 'escaped') return 'Escape Rope saved you from a knockout and paid out like a walk-away.'
-  return null
 }
 
 export function outcomeTone(outcome: FightOutcome): 'good' | 'bad' {
@@ -155,7 +172,7 @@ export function outcomeTone(outcome: FightOutcome): 'good' | 'bad' {
 }
 
 export function checkpointHeadline(cp: Pick<CheckpointResult, 'stage'> | null): string {
-  return cp ? `Stage ${cp.stage} cleared` : 'Stage cleared'
+  return cp ? `Level ${cp.stage} cleared` : 'Level cleared'
 }
 
 export function checkpointNet(bankroll: number, buyIn: number): string {
@@ -166,12 +183,12 @@ export function leaveLabel(bankroll: number): string {
   return `Leave with ${coinsText(bankroll)}`
 }
 
-export function continueLabel(nextStage: number): string {
-  return `Continue to stage ${nextStage}`
+export function continueLabel(nextLevel: number): string {
+  return `Continue to level ${nextLevel}`
 }
 
 export function nextTargetLine(state: Pick<GameState, 'stage' | 'target'>): string {
-  return `Reach ${formatCoins(state.target)} after the stage ${state.stage} boss or the run ends there.`
+  return `Reach ${formatCoins(state.target)} after the level ${state.stage} boss or the run ends there.`
 }
 
 export function stageNotice(state: Pick<GameState, 'lastCheckpoint' | 'target'>): string | null {
@@ -198,8 +215,6 @@ export function checkpointMissText(checkpoint: CheckpointResult | null, lastResu
       return `The boss knocked you out and you ${tail}.`
     case 'walkedAway':
       return `You walked away from the boss and ${tail}.`
-    case 'escaped':
-      return `You escaped the boss and ${tail}.`
   }
 }
 
@@ -220,9 +235,9 @@ export function gameOverText(
     if (cashOut !== null) return `${head} You get back ${coinsText(cashOut)}.`
     return head
   }
-  if (reason === 'broke') return 'You ran out of coins with nothing left to pawn. No coins come back from this run.'
+  if (reason === 'broke') return 'You ran out of coins. No coins come back from this run.'
   if (reason === 'left') {
-    return cashOut === null ? 'You left after a cleared stage. Leaving is free.' : `You left after a cleared stage and took all ${coinsText(cashOut)}. Leaving is free.`
+    return cashOut === null ? 'You left after a cleared level. Leaving is free.' : `You left after a cleared level and took all ${coinsText(cashOut)}. Leaving is free.`
   }
   return 'The run is over.'
 }
@@ -254,7 +269,7 @@ export function returnRows(
 export function runStatRows(s: Pick<GameState, 'fightsCompleted' | 'stagesCleared' | 'bossesDefeated' | 'peakBankroll' | 'totalWagered' | 'totalPaidOut' | 'seed'>): SummaryRow[] {
   return [
     { label: 'Fights', value: String(s.fightsCompleted) },
-    { label: 'Stages cleared', value: String(s.stagesCleared) },
+    { label: 'Levels cleared', value: String(s.stagesCleared) },
     { label: 'Bosses defeated', value: String(s.bossesDefeated) },
     { label: 'Peak bankroll', value: formatCoins(s.peakBankroll) },
     { label: 'Total wagered', value: formatCoins(s.totalWagered) },
@@ -268,36 +283,7 @@ export function feeWarning(percent: number): string {
 }
 
 export function leaveFreeLine(): string {
-  return 'Leaving now is free. Continue only if you want to risk the next stage.'
-}
-
-export interface PawnItem {
-  readonly index: number
-  readonly name: string
-  readonly description: string
-  readonly value: number
-  readonly label: string
-}
-
-export interface PawnModel {
-  readonly title: string
-  readonly sub: string
-  readonly items: PawnItem[]
-}
-
-export function pawnModel(s: Pick<GameState, 'canPawn' | 'canBet' | 'upgrades'>): PawnModel | null {
-  if (!s.canPawn || s.canBet) return null
-  return {
-    title: 'You are out of coins',
-    sub: 'Pawn one of your upgrades to get back in the fight. The upgrade is gone for good.',
-    items: s.upgrades.map((u, index) => ({
-      index,
-      name: u.name,
-      description: u.description,
-      value: u.pawnValue,
-      label: `Pawn +${coinsText(u.pawnValue)}`,
-    })),
-  }
+  return 'Leaving now is free. Continue only if you want to risk the next level.'
 }
 
 export type LobbyState = 'play' | 'refill'
@@ -307,7 +293,7 @@ export function lobbyState(balance: number, presets: ReadonlyArray<number>, minB
 }
 
 export interface HudView {
-  readonly stage: string
+  readonly level: string
   readonly pips: Pip[]
   readonly fightText: string
   readonly boss: boolean
@@ -315,28 +301,74 @@ export interface HudView {
   readonly met: boolean
 }
 
+export function levelTitle(level: number, label: string): string {
+  return `Level ${level} - ${label}`
+}
+
 export function hudView(
-  s: Pick<GameState, 'phase' | 'stage' | 'fightInStage' | 'fightsPerStage' | 'fightNumberInStage' | 'isBossFight' | 'target' | 'bankroll' | 'lastCheckpoint'>,
+  s: Pick<GameState, 'phase' | 'level' | 'levelInfo' | 'fightInStage' | 'fightsPerStage' | 'fightNumberInStage' | 'isBossFight' | 'target' | 'bankroll' | 'lastCheckpoint'>,
 ): HudView {
   const cp = s.lastCheckpoint
   if (s.phase === 'checkpoint' && cp && cp.outcome === 'passed') {
     return {
-      stage: String(cp.stage),
+      level: levelTitle(cp.stage, levelDef(cp.stage).label),
       pips: fightPips({ fightInStage: s.fightsPerStage, fightsPerStage: s.fightsPerStage }),
-      fightText: `Stage ${cp.stage} cleared`,
+      fightText: `Level ${cp.stage} cleared`,
       boss: false,
       targetText: `Target ${formatCoins(cp.target)} reached`,
       met: true,
     }
   }
   return {
-    stage: String(s.stage),
+    level: levelTitle(s.level, s.levelInfo.difficultyLabel),
     pips: fightPips(s),
     fightText: fightLabel(s),
     boss: s.isBossFight,
     targetText: targetLine(s),
     met: targetMet(s),
   }
+}
+
+type ProfileInfo = Pick<LevelInfo, 'enemyDiceText' | 'bossDiceText' | 'koMultiplier' | 'bossKoMultiplier' | 'targetGrowthPercent'>
+
+export function levelProfileLine(info: ProfileInfo, boss = false): string {
+  const who = boss ? `Boss ${info.bossDiceText}` : `Enemies ${info.enemyDiceText}`
+  const ko = boss ? info.bossKoMultiplier : info.koMultiplier
+  return `${who} | Knockout ${formatMultiplier(ko)} | Target +${info.targetGrowthPercent}%`
+}
+
+export function levelFullProfileLine(info: ProfileInfo): string {
+  return `Enemies ${info.enemyDiceText}, boss ${info.bossDiceText} | Knockout ${formatMultiplier(info.koMultiplier)}, boss ${formatMultiplier(info.bossKoMultiplier)} | Target +${info.targetGrowthPercent}%`
+}
+
+export function maxWinLine(info: Pick<LevelInfo, 'maxWinPerLevel'>): string {
+  return `Max win this level: ${formatMultiplier(info.maxWinPerLevel)} your bankroll`
+}
+
+export function nextLevelTitle(info: Pick<LevelInfo, 'level' | 'difficultyLabel'>): string {
+  return `Next: ${levelTitle(info.level, info.difficultyLabel)}`
+}
+
+export function levelsBlurb(): string {
+  return 'Levels start easy and get harder and richer: tougher enemies, but bigger knockout payouts.'
+}
+
+export function walkAwayPercents(fight: Pick<FightState, 'walkAwayRefundPercent' | 'walkAwayKeep'> | null): { readonly refund: number | null; readonly keep: number | null } {
+  return fight ? { refund: fight.walkAwayRefundPercent, keep: Math.round(fight.walkAwayKeep * 100) } : { refund: null, keep: null }
+}
+
+export function walkAwayRows(
+  r: Pick<FightResult, 'outcome' | 'walkAwayRefund' | 'walkAwayFromEarned'>,
+  refundPercent: number | null,
+  keepPercent: number | null,
+): SummaryRow[] {
+  if (r.outcome !== 'walkedAway') return []
+  const refundLabel = refundPercent === null ? 'Bet refund' : `Bet refund (${refundPercent}%)`
+  const earnedLabel = keepPercent === null ? 'Share of earned payout' : `Share of earned payout (${keepPercent}%)`
+  return [
+    { label: refundLabel, value: formatCoins(r.walkAwayRefund) },
+    { label: earnedLabel, value: formatCoins(r.walkAwayFromEarned) },
+  ]
 }
 
 export function targetLine(state: Pick<GameState, 'target'>): string {
@@ -399,13 +431,8 @@ export function coinsText(n: number): string {
   return `${formatCoins(n)} ${coinsWord(n)}`
 }
 
-export function skipLabel(skipCoins: number): string {
-  return `Skip (+${coinsText(skipCoins)})`
-}
-
-export function shopNote(state: Pick<GameState, 'bankroll' | 'skipCoins'>): string | null {
-  if (state.bankroll > 0) return null
-  return `You have no coins. Skipping pays ${coinsText(state.skipCoins)} so you can keep fighting.`
+export function skipLabel(): string {
+  return 'Skip'
 }
 
 export interface BuyInChoice {

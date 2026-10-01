@@ -7,18 +7,17 @@ export const TUTORIAL_KEY = 'diceBrawl.tutorial.v1'
 export interface TutorialProgress {
   readonly next: number
   readonly shopTip: boolean
-  readonly brokeTip: boolean
   readonly off: boolean
 }
 
-export const FRESH_TUTORIAL: TutorialProgress = { next: 0, shopTip: false, brokeTip: false, off: false }
+export const FRESH_TUTORIAL: TutorialProgress = { next: 0, shopTip: false, off: false }
 
 export interface TutorialCtx {
   readonly mode: 'lobby' | 'run'
   readonly state: GameState | null
 }
 
-export type TutorialTarget = 'buyin' | 'bets' | 'roll' | 'money' | 'walk' | 'progress' | 'offers' | 'skip' | 'pawn'
+export type TutorialTarget = 'buyin' | 'bets' | 'roll' | 'money' | 'walk' | 'progress' | 'offers'
 
 export interface TutorialView {
   readonly kind: 'step' | 'tip'
@@ -77,8 +76,9 @@ export const STEPS: ReadonlyArray<StepDef> = [
     target: 'walk',
     when: (c) => inFight(c) && c.state?.fight?.canWalkAway === true,
     text: (c) => {
-      const keep = c.state?.fight ? keepPercent(c.state.fight.walkAwayKeep) : 0
-      return `Walk away keeps only ${keep}% of your payout, so use it as an emergency exit.`
+      const f = c.state?.fight
+      if (!f) return ''
+      return `Walk away pays back ${f.walkAwayRefundPercent}% of your bet plus ${keepPercent(f.walkAwayKeep)}% of the payout you have earned, so use it as an emergency exit.`
     },
   },
   {
@@ -88,7 +88,7 @@ export const STEPS: ReadonlyArray<StepDef> = [
     text: (c) => {
       const s = c.state
       if (!s) return ''
-      return `Beat ${s.fightsPerStage - 1} enemies and then a boss, reach ${formatCoins(s.target)} coins or ${s.failedCheckpointFeePercent}% is withheld, then leave with your coins or go on.`
+      return `Beat ${s.fightsPerStage - 1} enemies and then a boss to clear the level, reach ${formatCoins(s.target)} coins or ${s.failedCheckpointFeePercent}% is withheld, then leave with your coins or push on to a harder, richer level.`
     },
   },
 ]
@@ -97,23 +97,7 @@ const SHOP_TIP: StepDef = {
   id: 'tip-shop',
   target: 'offers',
   when: (c) => c.mode === 'run' && c.state !== null && c.state.phase === 'shop',
-  text: (c) => {
-    const skip = c.state ? coinsText(c.state.skipCoins) : 'a few coins'
-    return `Pick one upgrade to keep for the run, or skip the shop for ${skip}.`
-  },
-}
-
-const BROKE_TIP: StepDef = {
-  id: 'tip-broke',
-  target: 'skip',
-  when: (c) => c.mode === 'run' && c.state !== null && (c.state.phase === 'shop' || c.state.phase === 'bet') && c.state.bankroll < 1,
-  text: (c) => {
-    const s = c.state
-    const value = s ? coinsText(s.skipCoins) : 'a few coins'
-    return s && s.phase === 'bet'
-      ? `You are out of coins, so pawn an upgrade for ${value} to keep fighting.`
-      : `You are out of coins, so skip the shop for ${value} to keep fighting.`
-  },
+  text: () => 'Pick one upgrade to keep for the run, or skip the shop. Skipping pays nothing.',
 }
 
 export function parseTutorial(raw: string | null): TutorialProgress {
@@ -126,7 +110,6 @@ export function parseTutorial(raw: string | null): TutorialProgress {
     return {
       next,
       shopTip: r.shopTip === true,
-      brokeTip: r.brokeTip === true,
       off: r.off === true,
     }
   } catch {
@@ -163,17 +146,12 @@ export function pickTutorial(p: TutorialProgress, ctx: TutorialCtx): TutorialVie
     if (def && def.when(ctx)) return view(def, 'step', i, ctx)
   }
   if (!p.shopTip && SHOP_TIP.when(ctx)) return view(SHOP_TIP, 'tip', -1, ctx)
-  if (!p.brokeTip && BROKE_TIP.when(ctx)) {
-    const target: TutorialTarget = ctx.state && ctx.state.phase === 'bet' ? 'pawn' : 'skip'
-    return { ...view(BROKE_TIP, 'tip', -1, ctx), target }
-  }
   return null
 }
 
 function defFor(v: TutorialView): StepDef | null {
   if (v.kind === 'step') return STEPS[v.index] ?? null
   if (v.id === SHOP_TIP.id) return SHOP_TIP
-  if (v.id === BROKE_TIP.id) return BROKE_TIP
   return null
 }
 
@@ -190,7 +168,6 @@ export function refreshText(v: TutorialView, ctx: TutorialCtx): string {
 export function acknowledge(p: TutorialProgress, v: TutorialView): TutorialProgress {
   if (v.kind === 'step') return { ...p, next: Math.max(p.next, v.index + 1) }
   if (v.id === SHOP_TIP.id) return { ...p, shopTip: true }
-  if (v.id === BROKE_TIP.id) return { ...p, brokeTip: true }
   return p
 }
 

@@ -15,7 +15,6 @@ import {
   exchangeOutcome,
   exchangeTone,
   feeWarning,
-  fightMessage,
   fightTitle,
   formatCoins,
   formatMultiplier,
@@ -26,21 +25,26 @@ import {
   hudView,
   leaveFreeLine,
   leaveLabel,
+  levelFullProfileLine,
+  levelProfileLine,
+  levelsBlurb,
   lobbyState,
+  maxWinLine,
+  nextLevelTitle,
   nextTargetLine,
   offerOwnedText,
   outcomeTone,
   parseSeed,
-  pawnModel,
   pickBuyIn,
   randomSeed,
   returnRows,
   runStatRows,
-  shopNote,
   skipLabel,
   stageNotice,
   targetMet,
   visiblePresets,
+  walkAwayPercents,
+  walkAwayRows,
   walletLine,
 } from './format.ts'
 import { createStage } from './arena.ts'
@@ -55,12 +59,9 @@ import {
   coinBurstCount,
   confettiCount,
   exchangeCues,
-  exchangeTags,
   fightCelebration,
-  fightStartTags,
-  ownedFrom,
-  resultTags,
   transitionCues,
+  triggerTags,
 } from './effects.ts'
 import { createFeedback } from './feedback.ts'
 import type { Feedback } from './feedback.ts'
@@ -75,7 +76,8 @@ import { createFx } from './fx.ts'
 const TICK_MS = 1000 / 60
 const MAX_FRAME_MS = 250
 const CONTINUE_GUARD_MS = 400
-const NOTICE_MS = 4500
+const NOTICE_MS = 3500
+const NOTICE_DELAY_MS = 1600
 const DELTA_MS = 1500
 const LOSS_FX_MS = 900
 
@@ -182,6 +184,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
   let resetArmed = false
   let anim: Anim | null = null
   let noticeText = ''
+  let noticeFrom = 0
   let noticeUntil = 0
   let lobbyNote = ''
   let activeStage: Stage | null = null
@@ -211,10 +214,10 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
   const statEls = {
     bankroll: bankValue,
     bet: stat(stats, 'Bet'),
-    stage: stat(stats, 'Stage'),
   }
   const hudGear = gearButton()
   stats.append(hudGear)
+  const levelEl = h('div', 'level-line')
   const progress = h('div', 'progress', undefined, { 'data-tut': 'progress' })
   const pipsEl = h('div', 'fight-pips')
   const pipEls: HTMLElement[] = []
@@ -229,7 +232,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
   const chips = h('div', 'chips', undefined, { 'aria-label': 'Owned upgrades' })
   const notice = h('div', 'notice', undefined, { role: 'status' })
   notice.hidden = true
-  hud.append(stats, progress, targetEl, chips)
+  hud.append(stats, levelEl, progress, targetEl, chips)
   const play = h('main', 'play')
   const screenEl = h('div', 'screen')
   const seedTag = h('div', 'seed')
@@ -388,6 +391,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     activeStage = null
     anim = null
     noticeText = ''
+    noticeFrom = 0
     noticeUntil = 0
     screenKey = ''
     chipKey = null
@@ -506,7 +510,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     setText(statEls.bet, v.bet > 0 && v.phase !== 'bet' && v.phase !== 'shop' && v.phase !== 'checkpoint' ? formatCoins(v.bet) : '-')
     const hv = hudView(v)
     const met = hv.met
-    setText(statEls.stage, hv.stage)
+    setText(levelEl, hv.level)
     const moving = bank !== null && bankShown !== bank.to
     const dir = moving && bank ? (bank.to > bank.from ? ' bank-up' : ' bank-down') : ''
     setClass(statEls.bankroll, 'stat-value ' + (met ? 'good' : 'short') + dir)
@@ -534,7 +538,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
       chipsSeeded = true
       chipDelayMs = 0
     }
-    const showNotice = noticeText !== '' && now < noticeUntil
+    const showNotice = noticeText !== '' && now >= noticeFrom && now < noticeUntil
     if (showNotice) setText(notice, noticeText)
     notice.hidden = !showNotice
   }
@@ -603,7 +607,8 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
         grid.append(b)
       }
       card.append(grid)
-      card.append(h('div', 'card-sub', 'Your buy-in is your starting bankroll. Clear each stage boss to keep going, or leave with your coins.'))
+      card.append(h('div', 'card-sub', 'Your buy-in is your starting bankroll. Clear each level boss to keep going, or leave with your coins.'))
+      card.append(h('div', 'card-sub levels-note', levelsBlurb()))
     } else {
       card.append(h('div', 'card-sub reason', `You need at least ${coinsText(CONFIG.minBuyIn)} to start a run.`))
       card.append(button('btn-warn btn-wide', 'Refill wallet', () => {
@@ -630,26 +635,9 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
   function buildBet(s: GameState): Screen {
     const card = h('div', 'card' + (s.isBossFight ? ' card-boss' : ''))
     if (s.isBossFight) card.append(h('div', 'boss-badge', 'BOSS FIGHT'))
-    const pawn = pawnModel(s)
-    if (pawn) {
-      card.append(h('h2', 'card-title', pawn.title))
-      card.append(h('div', 'card-sub', pawn.sub))
-      const list = h('div', 'pawn-list', undefined, { 'data-tut': 'pawn' })
-      for (const item of pawn.items) {
-        const r = h('div', 'pawn-row')
-        const info = h('div', 'pawn-info')
-        info.append(h('div', 'pawn-name', item.name), h('div', 'pawn-desc', item.description))
-        const b = button('btn-warn', item.label, () => act({ type: 'pawn', index: item.index }))
-        b.setAttribute('aria-label', `Pawn ${item.name} for ${coinsText(item.value)}`)
-        r.append(info, b)
-        list.append(r)
-      }
-      card.append(list)
-      centered(card)
-      return { update() {} }
-    }
     card.append(h('h2', 'card-title', 'Place your bet'))
     card.append(h('div', 'card-sub', `Bankroll ${formatCoins(s.bankroll)} - Min ${formatCoins(s.minBet)} - Max ${formatCoins(s.maxBet)}`))
+    card.append(h('div', 'level-profile', levelProfileLine(s.levelInfo, s.isBossFight)))
     if (s.isBossFight) card.append(h('div', 'fee-note', feeWarning(s.failedCheckpointFeePercent)))
     const grid = h('div', 'bet-grid', undefined, { 'data-tut': 'bets' })
     for (const p of visiblePresets(s)) {
@@ -699,7 +687,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     playerHead.append(playerInfo, playerDice)
     playerCard.append(playerHead)
 
-    const stage = createStage(first ? first.enemy.name : '', first ? first.isBoss : false, first ? first.enemy.trait : 'plain')
+    const stage = createStage(first ? first.enemy.name : '', first ? first.enemy.archetype : 'other', first ? first.isBoss : false, first ? first.enemy.trait : 'plain')
     activeStage = stage
     stage.root.addEventListener('pointerdown', skipAnim)
     const outcome = h('div', 'outcome', 'Tap ROLL to attack', { role: 'status', 'aria-live': 'polite' })
@@ -742,8 +730,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
         if (!intro) {
           intro = true
           if (!introSuppressed) {
-            const owned = ownedFrom(s.upgrades)
-            for (const t of fightStartTags(f, owned)) {
+            for (const t of triggerTags(f.startTriggers)) {
               stage.tag(t.side, t.text, t.tone)
               flashChip(t.upgrade)
             }
@@ -796,8 +783,8 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
         const key = `${f.index}|${ex.index}`
         if (key !== rollKey) {
           rollKey = key
-          stage.setRoll('enemy', rollChip(ex.enemyFaces, null, ex.enemyTotal), ex.winner === 'enemy' ? 'win' : ex.winner === 'tie' ? 'tie' : 'lose')
-          stage.setRoll('player', rollChip(ex.playerFaces, ex.playerFacesBeforeReroll, ex.playerTotal), ex.winner === 'player' ? 'win' : ex.winner === 'tie' ? 'tie' : 'lose')
+          stage.setRoll('enemy', rollChip(ex.enemyFaces, null, ex.enemyTotal, ex.enemyBonusApplied), ex.winner === 'enemy' ? 'win' : ex.winner === 'tie' ? 'tie' : 'lose')
+          stage.setRoll('player', rollChip(ex.playerFaces, ex.playerFacesBeforeReroll, ex.playerTotal, ex.playerBonusApplied), ex.winner === 'player' ? 'win' : ex.winner === 'tie' ? 'tie' : 'lose')
         }
         let line = exchangeOutcome(ex)
         if (ex.rerolled) line += ' (rerolled)'
@@ -821,11 +808,11 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
       const net = r.payout - r.bet
       if (r.isBoss) card.append(h('div', 'boss-badge', 'BOSS'))
       card.append(h('h2', `card-title outcome-${r.outcome}`, fightTitle(r.outcome, r.isBoss)))
-      const msg = fightMessage(r.outcome)
-      if (msg) card.append(h('div', 'card-sub', msg))
       const rows = h('div', 'rows')
       rows.append(row('Multiplier', formatMultiplier(r.multiplier)))
       rows.append(row('Bet', formatCoins(r.bet)))
+      const walk = walkAwayPercents(s.fight)
+      for (const w of walkAwayRows(r, walk.refund, walk.keep)) rows.append(row(w.label, w.value))
       payoutRow = rowWithValue('Payout', formatCoins(0))
       rows.append(payoutRow.node)
       netRow = rowWithValue('Net', formatNet(-r.bet))
@@ -833,8 +820,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
       rows.append(netRow.node)
       rows.append(row('Rolls', String(r.rolls)))
       card.append(rows)
-      const owned = ownedFrom(s.upgrades)
-      for (const t of resultTags(r, owned)) {
+      for (const t of triggerTags(r.upgradeTriggers)) {
         card.append(h('div', 'result-tag', t.text))
         tags.push(t.upgrade)
       }
@@ -889,6 +875,9 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     card.append(rows)
     card.append(h('div', 'net-line ' + (s.bankroll >= s.buyIn ? 'good-text' : 'bad-text'), 'Net so far ' + checkpointNet(s.bankroll, s.buyIn)))
     card.append(h('div', 'card-sub free-note', leaveFreeLine()))
+    const next = h('div', 'next-level')
+    next.append(h('div', 'next-level-title', nextLevelTitle(s.levelInfo)), h('div', 'level-profile', levelFullProfileLine(s.levelInfo)), h('div', 'level-profile level-maxwin', maxWinLine(s.levelInfo)))
+    card.append(next)
     card.append(h('div', 'card-sub checkpoint-note', nextTargetLine(s)))
     centered(card)
     actions.classList.add('actions-col')
@@ -898,7 +887,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     if (!quiet) {
       fx.flash('stage')
       fx.confetti(confettiCount(), shellBounds())
-      fx.banner('STAGE CLEARED')
+      fx.banner('LEVEL CLEARED')
     }
     let startAt = -1
     let lastTick = -1e9
@@ -920,8 +909,6 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     const card = h('div', 'card')
     card.append(h('h2', 'card-title', s.shopOffers.length > 0 ? 'Pick an upgrade' : 'Nothing new to offer'))
     if (s.shopOffers.length === 0) card.append(h('div', 'card-sub', 'You already own everything on offer.'))
-    const zero = shopNote(s)
-    if (zero) card.append(h('div', 'fee-note', zero))
     const offers = h('div', 'offers', undefined, { 'data-tut': 'offers' })
     s.shopOffers.forEach((u, i) => {
       const b = document.createElement('button')
@@ -943,8 +930,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     })
     card.append(offers)
     centered(card)
-    const skip = button('btn-secondary btn-big', skipLabel(s.skipCoins), () => act({ type: 'skip' }))
-    skip.setAttribute('data-tut', 'skip')
+    const skip = button('btn-secondary btn-big', skipLabel(), () => act({ type: 'skip' }))
     actions.append(skip)
     return { update() {} }
   }
@@ -985,8 +971,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     const f = a.next.fight
     if (!f) return
     for (const c of exchangeCues(a.ex, f.status)) feedback.play(c)
-    const owned = ownedFrom(a.next.upgrades)
-    for (const t of exchangeTags(a.ex, f, owned)) {
+    for (const t of triggerTags(a.ex.upgradeTriggers)) {
       activeStage?.tag(t.side, t.text, t.tone)
       flashChip(t.upgrade)
     }
@@ -1041,7 +1026,8 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
       const n = stageNotice(game.state)
       if (n) {
         noticeText = n
-        noticeUntil = performance.now() + NOTICE_MS
+        noticeFrom = performance.now() + NOTICE_DELAY_MS
+        noticeUntil = noticeFrom + NOTICE_MS
       }
     }
   }
@@ -1054,7 +1040,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
   function keyFor(v: GameState, dp: Phase): string {
     const bank2 = dp === 'bet' || dp === 'gameover' || dp === 'checkpoint' ? v.bankroll : 0
     const wal = dp === 'gameover' ? wallet.balance() : 0
-    return `${runId}|${dp}|${v.seed}|${v.fightsCompleted}|${v.stage}|${bank2}|${wal}|${v.upgrades.length}|${v.shopOffers.map((o) => o.id).join(',')}|${v.canPawn}|${v.canBet}`
+    return `${runId}|${dp}|${v.seed}|${v.fightsCompleted}|${v.stage}|${bank2}|${wal}|${v.upgrades.length}|${v.shopOffers.map((o) => o.id).join(',')}|${v.canBet}`
   }
 
   function tutorialCtx(): TutorialCtx {
@@ -1132,6 +1118,8 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
       const below = tr.bottom + 12
       const above = tr.top - bh - 12
       top = below + bh <= vh - 8 && (tr.top < vh / 2 || above < 8) ? below : Math.max(8, above)
+      const bar = actions.getBoundingClientRect()
+      if (ctx.mode === 'run' && ctx.state !== null && ctx.state.phase === 'fight' && bar.height > 0) top = Math.max(8, bar.top - bh - 8)
       left = Math.min(Math.max(shellRect.left + 12, tr.left + tr.width / 2 - width / 2), shellRect.right - width - 12)
     } else {
       ring.hidden = true

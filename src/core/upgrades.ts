@@ -11,6 +11,13 @@ function pct(milli: number): string {
   return `${Math.round(milli / 10)}%`
 }
 
+function ordinal(n: number): string {
+  const t = n % 100
+  if (t >= 11 && t <= 13) return `${n}th`
+  const u = n % 10
+  return `${n}${u === 1 ? 'st' : u === 2 ? 'nd' : u === 3 ? 'rd' : 'th'}`
+}
+
 function capText(id: UpgradeId): string {
   const n = CONFIG.upgradeMaxCopies[id]
   return n <= 1 ? ' Max 1 copy.' : ` Stacks up to ${n}.`
@@ -31,7 +38,7 @@ function describe(id: UpgradeId): string {
     case 'loadedDice':
       return `Winning rolls that total ${e.loadedDiceCritTotal} or more also crit, not just doubles.`
     case 'escapeRope':
-      return `When a hit would knock you out, you escape with the walk-away payout instead.`
+      return `Walking away refunds ${pct(e.escapeRopeRefundMilli)} more of your bet.`
     case 'insurance':
       return `Get ${pct(e.insuranceRefundMilli)} of your bet back when you lose a fight.`
     case 'finisher':
@@ -42,6 +49,18 @@ function describe(id: UpgradeId): string {
       return `Heal ${e.vampireHeal} HP whenever you land a hit.`
     case 'thickSkin':
       return `Take ${e.thickSkinReduction} less damage from every hit (min 1).`
+    case 'tieBreaker':
+      return `Ties count as your hit for ${e.tieBreakerDamage} damage.`
+    case 'firstBlood':
+      return `The first hit you land each fight is a crit.`
+    case 'ironGuard':
+      return `Enemy crits are one step weaker (x2 becomes x1, x3 becomes x2).`
+    case 'combo':
+      return `Every ${ordinal(e.comboEvery)} hit you land in a fight is a x${e.comboCritFactor} crit.`
+    case 'riposte':
+      return `Losing a roll by ${e.riposteMargin} or less still deals ${e.riposteDamage} damage to the enemy.`
+    case 'bloodlust':
+      return `Your hits deal +${e.bloodlustDamage} damage once the enemy is wounded.`
   }
 }
 
@@ -58,6 +77,12 @@ const NAMES: Readonly<Record<UpgradeId, string>> = {
   intimidate: 'Intimidate',
   vampire: 'Vampire Fang',
   thickSkin: 'Thick Skin',
+  tieBreaker: 'Tie Breaker',
+  firstBlood: 'First Blood',
+  ironGuard: 'Iron Guard',
+  combo: 'Combo',
+  riposte: 'Riposte',
+  bloodlust: 'Bloodlust',
 }
 
 export const UPGRADE_IDS: ReadonlyArray<UpgradeId> = [
@@ -73,6 +98,12 @@ export const UPGRADE_IDS: ReadonlyArray<UpgradeId> = [
   'intimidate',
   'vampire',
   'thickSkin',
+  'tieBreaker',
+  'firstBlood',
+  'ironGuard',
+  'combo',
+  'riposte',
+  'bloodlust',
 ]
 
 export function upgradeDef(id: UpgradeId): UpgradeDef {
@@ -86,13 +117,9 @@ export function upgradeDef(id: UpgradeId): UpgradeDef {
 
 export const UPGRADES: ReadonlyArray<UpgradeDef> = UPGRADE_IDS.map(upgradeDef)
 
-export function skipPawnValue(buyIn: number): number {
-  return Math.max(1, Math.floor((buyIn * CONFIG.skipPawnPermilleOfBuyIn) / 1000))
-}
-
-export function getUpgrade(id: UpgradeId, buyIn: number = CONFIG.defaultBuyIn): Upgrade {
+export function getUpgrade(id: UpgradeId): Upgrade {
   if (!UPGRADE_IDS.includes(id)) throw new Error(`Unknown upgrade ${id}`)
-  return { ...upgradeDef(id), pawnValue: skipPawnValue(buyIn) }
+  return upgradeDef(id)
 }
 
 export function countOwned(owned: ReadonlyArray<UpgradeId>, id: UpgradeId): number {
@@ -116,13 +143,21 @@ export interface FightMods {
   readonly shieldBlock: number
   readonly critFactor: number
   readonly critTotal: number
+  readonly walkAwayRefundMilli: number
   readonly walkAwayKeepMilli: number
-  readonly escapeRope: boolean
   readonly lossRefundMilli: number
   readonly koBonusMilli: number
   readonly enemyHpCutPercent: number
   readonly healOnHit: number
   readonly damageReduction: number
+  readonly tieDamage: number
+  readonly firstBlood: boolean
+  readonly enemyCritStep: number
+  readonly comboEvery: number
+  readonly comboCritFactor: number
+  readonly riposteMargin: number
+  readonly riposteDamage: number
+  readonly bloodlustDamage: number
 }
 
 export function computeMods(owned: ReadonlyArray<UpgradeId>): FightMods {
@@ -138,12 +173,20 @@ export function computeMods(owned: ReadonlyArray<UpgradeId>): FightMods {
     shieldBlock: e.shieldBlockAmount,
     critFactor: CONFIG.critFactor,
     critTotal: count('loadedDice') > 0 ? e.loadedDiceCritTotal : 0,
+    walkAwayRefundMilli: CONFIG.walkAwayRefundMilli + count('escapeRope') * e.escapeRopeRefundMilli,
     walkAwayKeepMilli: CONFIG.walkAwayKeepMilli,
-    escapeRope: count('escapeRope') > 0,
     lossRefundMilli: count('insurance') * e.insuranceRefundMilli,
     koBonusMilli: count('finisher') * e.finisherKoBonusMilli,
     enemyHpCutPercent: count('intimidate') * e.intimidateEnemyHpPercent,
     healOnHit: count('vampire') * e.vampireHeal,
     damageReduction: count('thickSkin') * e.thickSkinReduction,
+    tieDamage: count('tieBreaker') > 0 ? e.tieBreakerDamage : 0,
+    firstBlood: count('firstBlood') > 0,
+    enemyCritStep: count('ironGuard') * e.ironGuardCritStep,
+    comboEvery: count('combo') > 0 ? e.comboEvery : 0,
+    comboCritFactor: e.comboCritFactor,
+    riposteMargin: count('riposte') > 0 ? e.riposteMargin : 0,
+    riposteDamage: count('riposte') > 0 ? e.riposteDamage : 0,
+    bloodlustDamage: count('bloodlust') * e.bloodlustDamage,
   }
 }

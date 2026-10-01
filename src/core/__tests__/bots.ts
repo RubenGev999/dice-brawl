@@ -1,5 +1,4 @@
 import {
-  CONFIG,
   canWalkAway,
   computeMods,
   createGame,
@@ -7,12 +6,13 @@ import {
   fightPayout,
   generateEnemy,
   getUpgrade,
+  koMultiplierMilliForLevel,
   rollExchange,
   shopOffersForFight,
 } from '../index.ts'
 import type { Game, GameState, ShopOffer, SimFight, UpgradeId } from '../index.ts'
 
-export type WalkRule = 'never' | 'emergency' | 'first'
+export type WalkRule = 'never' | 'emergency' | 'lowHp' | 'aboutToLose' | 'first'
 export type BetStyle = 'fixed' | 'bossTarget' | 'bossMax' | 'target' | 'max' | 'firstMax'
 export type ShopRule = 'priority' | 'skip'
 
@@ -21,39 +21,46 @@ export interface BotSpec {
   readonly betPercent: number
   readonly style: BetStyle
   readonly walk: WalkRule
+  readonly targetWalk: boolean
   readonly shop: ShopRule
   readonly leaveAfterStage: number | null
 }
 
-export const WALK_SETTINGS = { bossHpAtMost: 1 }
+export const WALK_SETTINGS = { bossHpAtMost: 1, lowHpPercent: 40, aboutToLoseHpPercent: 35, aboutToLoseEnemyPercent: 40 }
 
 export const SENSIBLE: BotSpec = {
   name: 'sensible',
-  betPercent: 20,
+  betPercent: 25,
   style: 'target',
-  walk: 'emergency',
+  walk: 'aboutToLose',
+  targetWalk: true,
   shop: 'priority',
   leaveAfterStage: null,
 }
 
 export const BOTS: Readonly<Record<string, BotSpec>> = {
   sensible: SENSIBLE,
+  sensibleNoWalk: { ...SENSIBLE, name: 'sensibleNoWalk', walk: 'never', targetWalk: false },
+  lowHpWalk: { ...SENSIBLE, name: 'lowHpWalk', walk: 'lowHp', targetWalk: false },
+  aboutToLose: { ...SENSIBLE, name: 'aboutToLose', walk: 'aboutToLose', targetWalk: false },
+  bossEmergency: { ...SENSIBLE, name: 'bossEmergency', walk: 'emergency' },
   fixedMedium: { ...SENSIBLE, name: 'fixedMedium', style: 'fixed' },
+  fixed20: { ...SENSIBLE, name: 'fixed20', betPercent: 20, style: 'fixed' },
   bossTarget: { ...SENSIBLE, name: 'bossTarget', style: 'bossTarget' },
   minBossMax: { ...SENSIBLE, name: 'minBossMax', betPercent: 0, style: 'bossMax' },
   minBossMaxLeave1: { ...SENSIBLE, name: 'minBossMaxLeave1', betPercent: 0, style: 'bossMax', leaveAfterStage: 1 },
   minSkipWalk: { ...SENSIBLE, name: 'minSkipWalk', betPercent: 0, style: 'fixed', shop: 'skip' },
-  allIn: { name: 'allIn', betPercent: 100, style: 'max', walk: 'never', shop: 'priority', leaveAfterStage: null },
+  allIn: { ...SENSIBLE, name: 'allIn', betPercent: 100, style: 'max', walk: 'never', targetWalk: false },
+  allInWalk: { ...SENSIBLE, name: 'allInWalk', betPercent: 100, style: 'max', walk: 'aboutToLose', targetWalk: false },
   timid: { ...SENSIBLE, name: 'timid', walk: 'first' },
   coasting: { ...SENSIBLE, name: 'coasting', betPercent: 0, style: 'fixed' },
-  minSkipFail: { name: 'minSkipFail', betPercent: 0, style: 'fixed', walk: 'never', shop: 'skip', leaveAfterStage: null },
+  minSkipFail: { ...SENSIBLE, name: 'minSkipFail', betPercent: 0, style: 'fixed', walk: 'never', targetWalk: false, shop: 'skip' },
   leave1: { ...SENSIBLE, name: 'leave1', leaveAfterStage: 1 },
   leave2: { ...SENSIBLE, name: 'leave2', leaveAfterStage: 2 },
   leave3: { ...SENSIBLE, name: 'leave3', leaveAfterStage: 3 },
   firstAllIn: { ...SENSIBLE, name: 'firstAllIn', betPercent: 0, style: 'firstMax' },
   firstAllInLeave1: { ...SENSIBLE, name: 'firstAllInLeave1', betPercent: 0, style: 'firstMax', leaveAfterStage: 1 },
   fixed10: { ...SENSIBLE, name: 'fixed10', betPercent: 10, style: 'fixed' },
-  fixed25: { ...SENSIBLE, name: 'fixed25', betPercent: 25, style: 'fixed' },
   fixed50: { ...SENSIBLE, name: 'fixed50', betPercent: 50, style: 'fixed' },
 }
 
@@ -61,13 +68,19 @@ export const UPGRADE_PRIORITY: ReadonlyArray<UpgradeId> = [
   'weightedDice',
   'sharpBlade',
   'thickSkin',
+  'bloodlust',
   'shield',
   'intimidate',
-  'vampire',
-  'secondWind',
-  'finisher',
   'vitality',
+  'firstBlood',
+  'secondWind',
+  'combo',
+  'finisher',
+  'vampire',
+  'riposte',
+  'ironGuard',
   'loadedDice',
+  'tieBreaker',
   'escapeRope',
   'insurance',
 ]
@@ -85,28 +98,52 @@ export function pickIndex(offers: ReadonlyArray<ShopOffer>): number {
   return best
 }
 
-export function emergencyWalk(hp: number, isBoss: boolean): boolean {
-  return isBoss && hp <= WALK_SETTINGS.bossHpAtMost
+export interface WalkView {
+  readonly playerHp: number
+  readonly playerMaxHp: number
+  readonly enemyHp: number
+  readonly enemyMaxHp: number
+  readonly isBoss: boolean
 }
 
-function wantsWalkSim(rule: WalkRule, f: SimFight): boolean {
-  if (!canWalkAway(f) || rule === 'never') return false
-  if (rule === 'first') return true
-  return emergencyWalk(f.playerHp, f.isBoss)
+export function walkByRule(rule: WalkRule, v: WalkView): boolean {
+  switch (rule) {
+    case 'never':
+      return false
+    case 'first':
+      return true
+    case 'emergency':
+      return v.isBoss && v.playerHp <= WALK_SETTINGS.bossHpAtMost
+    case 'lowHp':
+      return v.playerHp * 100 <= v.playerMaxHp * WALK_SETTINGS.lowHpPercent
+    case 'aboutToLose':
+      return (
+        v.playerHp * 100 <= v.playerMaxHp * WALK_SETTINGS.aboutToLoseHpPercent &&
+        v.enemyHp * 100 > v.enemyMaxHp * WALK_SETTINGS.aboutToLoseEnemyPercent
+      )
+  }
 }
 
-export function koNetMilli(isBoss: boolean): number {
-  return isBoss
-    ? CONFIG.bossFullKoMultiplierMilli + CONFIG.bossKoBonusMilli - 1000
-    : CONFIG.fullKoMultiplierMilli + CONFIG.koBonusMilli - 1000
+function simView(f: SimFight): WalkView {
+  return { playerHp: f.playerHp, playerMaxHp: f.playerMaxHp, enemyHp: f.enemyHp, enemyMaxHp: f.enemyMaxHp, isBoss: f.isBoss }
+}
+
+export function koNetMilli(level: number, isBoss: boolean): number {
+  return koMultiplierMilliForLevel(level, isBoss) - 1000
 }
 
 export function wantsWalk(bot: BotSpec, st: GameState): boolean {
   const f = st.fight
-  if (!f || !f.canWalkAway || bot.walk === 'never') return false
-  if (bot.walk === 'first') return true
-  if (emergencyWalk(f.player.hp, f.isBoss)) return true
-  return f.isBoss && st.bankroll < st.target && st.bankroll + f.walkAwayPayout >= st.target
+  if (!f || !f.canWalkAway) return false
+  const view: WalkView = {
+    playerHp: f.player.hp,
+    playerMaxHp: f.player.maxHp,
+    enemyHp: f.enemy.hp,
+    enemyMaxHp: f.enemy.maxHp,
+    isBoss: f.isBoss,
+  }
+  if (walkByRule(bot.walk, view)) return true
+  return bot.targetWalk && f.isBoss && st.bankroll < st.target && st.bankroll + f.walkAwayPayout >= st.target
 }
 
 export function betFor(bot: BotSpec, st: GameState): number {
@@ -118,7 +155,7 @@ export function betFor(bot: BotSpec, st: GameState): number {
   if (bot.style === 'fixed' || (bot.style === 'bossTarget' && !st.isBossFight)) return share
   if (b >= st.target) return st.isBossFight ? Math.max(st.minBet, Math.min(share, b - st.target)) : st.minBet
   const normalsLeft = st.isBossFight ? 0 : st.fightsPerStage - 1 - st.fightInStage
-  const reach = st.isBossFight ? koNetMilli(true) : normalsLeft * koNetMilli(false) + koNetMilli(true)
+  const reach = st.isBossFight ? koNetMilli(st.level, true) : normalsLeft * koNetMilli(st.level, false) + koNetMilli(st.level, true)
   return Math.max(share, Math.ceil(((st.target - b) * 1000) / reach))
 }
 
@@ -148,12 +185,9 @@ export function playRun(seed: number, bot: BotSpec, buyIn = 100, maxFights = 400
     const st = game.state
     if (st.phase === 'gameover' || st.fightsCompleted >= maxFights) break
     if (st.phase === 'bet') {
-      if (st.canPawn) game.dispatch({ type: 'pawn', index: 0 })
-      else game.dispatch({ type: 'bet', amount: betFor(bot, st) })
+      game.dispatch({ type: 'bet', amount: betFor(bot, st) })
     } else if (st.phase === 'fight') {
-      const f = st.fight
-      const walk = f !== null && f.canWalkAway && wantsWalk(bot, st)
-      game.dispatch({ type: walk ? 'walkAway' : 'roll' })
+      game.dispatch({ type: wantsWalk(bot, st) ? 'walkAway' : 'roll' })
     } else if (st.phase === 'result') {
       const r = st.lastResult
       if (r) {
@@ -192,22 +226,33 @@ export interface FightSample {
   readonly payout: number
   readonly rolls: number
   readonly won: boolean
+  readonly walked: boolean
+  readonly lowHpSeen: boolean
 }
 
 export function simFight(
   seed: number,
   index: number,
   upgrades: ReadonlyArray<UpgradeId>,
-  walk: WalkRule = 'emergency',
+  walk: WalkRule = 'aboutToLose',
   bet = 1000,
 ): FightSample {
   const mods = computeMods(upgrades)
   const f = createSimFight(seed, index, bet, mods, generateEnemy(seed, index))
+  let lowHpSeen = false
   while (f.status === 'active') {
-    if (wantsWalkSim(walk, f)) f.status = 'walkedAway'
+    if (canWalkAway(f) && walkByRule('lowHp', simView(f))) lowHpSeen = true
+    if (canWalkAway(f) && walkByRule(walk, simView(f))) f.status = 'walkedAway'
     else rollExchange(f)
   }
-  return { bet, payout: fightPayout(f), rolls: f.exchanges.length, won: f.status === 'won' }
+  return {
+    bet,
+    payout: fightPayout(f),
+    rolls: f.exchanges.length,
+    won: f.status === 'won',
+    walked: f.status === 'walkedAway',
+    lowHpSeen,
+  }
 }
 
 export function priorityBuild(seed: number, size: number): UpgradeId[] {

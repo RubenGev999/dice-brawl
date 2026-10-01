@@ -1,6 +1,8 @@
-export { TICKS_PER_SECOND, CONFIG, MILLI } from './config.ts'
+export { TICKS_PER_SECOND, CONFIG, MILLI, RULES_VERSION } from './config.ts'
+export type { LevelDef } from './config.ts'
 export {
   createGame,
+  createGameFromLog,
   replay,
   clampBet,
   minBetFor,
@@ -8,11 +10,11 @@ export {
   maxBetFor,
   isValidBuyIn,
   targetForStage,
-  targetFloorForStage,
   targetGrowthPercentForStage,
   shopOrderForFight,
   shopOffersForFight,
 } from './game.ts'
+export { levelDef, levelInfo, koMultiplierMilliForLevel, enemyBonusMilliFor } from './levels.ts'
 export {
   UPGRADES,
   UPGRADE_IDS,
@@ -21,16 +23,18 @@ export {
   computeMods,
   countOwned,
   isUseful,
-  skipPawnValue,
 } from './upgrades.ts'
 export type { FightMods } from './upgrades.ts'
 export {
   generateEnemy,
   stageOfFight,
+  levelOfFight,
   isBossFight,
+  archetypeOf,
   diceText,
   traitText,
   enemyBonusMilliForFight,
+  normalTraitWeights,
   NORMAL_TRAITS,
   BOSS_TRAITS,
 } from './enemies.ts'
@@ -41,17 +45,22 @@ export {
   hasDoubles,
   payoutAt,
   walkAwayPayoutAt,
+  walkAwayPartsAt,
   lossPayoutAt,
   enemyMaxHpWithMods,
   damageMultiplierMilli,
   fullKoMultiplierMilliFor,
   koBonusMilliFor,
   enemyCurrentBonus,
+  playerCurrentBonus,
+  playerMaxFace,
   currentWalkAwayPayout,
+  currentWalkAwayParts,
   canWalkAway,
   fightPayout,
+  resultTriggers,
 } from './fight.ts'
-export type { SimFight } from './fight.ts'
+export type { SimFight, WalkAwayParts } from './fight.ts'
 export { mulberry32, createStream, deriveSeed, hashString } from './rng.ts'
 export type { Rng } from './rng.ts'
 export type {
@@ -68,16 +77,20 @@ export type {
   EnemyTraitId,
   NormalTraitId,
   BossTraitId,
+  Archetype,
   PlayerFightState,
   ExchangeRecord,
   ExchangeWinner,
+  CritSource,
   CheckpointResult,
   CheckpointOutcome,
   GameOverReason,
   BetPreset,
   BetPresetId,
+  LevelInfo,
   Upgrade,
   UpgradeDef,
   UpgradeId,
+  UpgradeTrigger,
   ShopOffer,
 } from './types.ts'

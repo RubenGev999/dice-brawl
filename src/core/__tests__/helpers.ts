@@ -16,9 +16,9 @@ export function scriptedRng(values: number[]): Rng {
   }
 }
 
-export const DUMMY: EnemyDef = { name: 'Dummy', isBoss: false, maxHp: 10, dice: [6, 6], bonus: 0, trait: 'plain' }
+export const DUMMY: EnemyDef = { name: 'Dummy', archetype: 'other', isBoss: false, maxHp: 10, dice: [6, 6], bonus: 0, trait: 'plain' }
 
-export const BOSS_DUMMY: EnemyDef = { name: 'Boss Dummy', isBoss: true, maxHp: 10, dice: [6, 6], bonus: 0, trait: 'enrage' }
+export const BOSS_DUMMY: EnemyDef = { name: 'Boss Dummy', archetype: 'other', isBoss: true, maxHp: 10, dice: [6, 6], bonus: 0, trait: 'enrage' }
 
 export function scriptedFight(
   playerFaces: number[],
@@ -50,7 +50,6 @@ export function playFight(game: Game, amount: number): void {
 
 export function playToBoss(game: Game, amount: (game: Game) => number): void {
   for (let k = 0; k < 4 && game.state.phase !== 'gameover'; k++) {
-    if (game.state.canPawn) game.dispatch({ type: 'pawn', index: 0 })
     playFight(game, amount(game))
     game.dispatch({ type: 'continue' })
     if (game.state.phase === 'shop') game.dispatch({ type: 'skip' })

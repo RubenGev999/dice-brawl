@@ -1,8 +1,6 @@
-import { computeMods, hasDoubles, koBonusMilliFor, MILLI } from '../core/index.ts'
-import type { Action, ExchangeRecord, FightResult, FightState, FightStatus, GameState, UpgradeId } from '../core/index.ts'
+import type { Action, ExchangeRecord, FightStatus, GameState, UpgradeId, UpgradeTrigger } from '../core/index.ts'
 import type { Cue } from './feedback.ts'
-
-export type Owned = Readonly<Partial<Record<UpgradeId, number>>>
+import { isRiposte } from './format.ts'
 
 export type TagTone = 'good' | 'bad' | 'gold' | 'info'
 
@@ -15,92 +13,50 @@ export interface UpgradeTag {
   readonly side: TagSide
 }
 
-export function ownedFrom(upgrades: ReadonlyArray<{ readonly id: UpgradeId }>): Owned {
-  const out: Partial<Record<UpgradeId, number>> = {}
-  for (const u of upgrades) out[u.id] = (out[u.id] ?? 0) + 1
-  return out
+const TRIGGER_STYLE: Readonly<Record<UpgradeId, { readonly tone: TagTone; readonly side: TagSide }>> = {
+  weightedDice: { tone: 'info', side: 'player' },
+  sharpBlade: { tone: 'gold', side: 'player' },
+  secondWind: { tone: 'info', side: 'player' },
+  vitality: { tone: 'good', side: 'player' },
+  shield: { tone: 'info', side: 'player' },
+  loadedDice: { tone: 'gold', side: 'player' },
+  escapeRope: { tone: 'info', side: 'player' },
+  insurance: { tone: 'good', side: 'player' },
+  finisher: { tone: 'gold', side: 'player' },
+  intimidate: { tone: 'info', side: 'enemy' },
+  vampire: { tone: 'good', side: 'player' },
+  thickSkin: { tone: 'info', side: 'player' },
+  tieBreaker: { tone: 'gold', side: 'player' },
+  firstBlood: { tone: 'gold', side: 'player' },
+  ironGuard: { tone: 'info', side: 'player' },
+  combo: { tone: 'gold', side: 'player' },
+  riposte: { tone: 'gold', side: 'player' },
+  bloodlust: { tone: 'gold', side: 'player' },
 }
 
-export function ownedIds(owned: Owned): UpgradeId[] {
-  const ids: UpgradeId[] = []
-  for (const [id, n] of Object.entries(owned) as Array<[UpgradeId, number]>) for (let i = 0; i < n; i++) ids.push(id)
-  return ids
-}
-
-function has(owned: Owned, id: UpgradeId): boolean {
-  return (owned[id] ?? 0) > 0
-}
-
-function trimNumber(n: number): string {
-  return String(Number(n.toFixed(2)))
+export function triggerTags(triggers: ReadonlyArray<UpgradeTrigger>): UpgradeTag[] {
+  return triggers.map((t) => {
+    const style = TRIGGER_STYLE[t.id]
+    return { upgrade: t.id, text: t.text, tone: style.tone, side: style.side }
+  })
 }
 
 export function isKnockout(ex: ExchangeRecord): boolean {
-  return ex.winner === 'player' && ex.enemyHpAfter <= 0
-}
-
-export function finisherBonus(fight: Pick<FightState, 'isBoss' | 'koBonusMultiplier'>): number {
-  const base = koBonusMilliFor(fight.isBoss, computeMods([])) / MILLI
-  const extra = fight.koBonusMultiplier - base
-  return extra > 1e-9 ? extra : 0
-}
-
-export function exchangeTags(ex: ExchangeRecord, fight: FightState, owned: Owned): UpgradeTag[] {
-  const tags: UpgradeTag[] = []
-  if (ex.blocked > 0 && has(owned, 'shield')) tags.push({ upgrade: 'shield', text: `Shield -${ex.blocked}`, tone: 'info', side: 'player' })
-  if (ex.rerolled && has(owned, 'secondWind')) tags.push({ upgrade: 'secondWind', text: 'Second Wind', tone: 'info', side: 'player' })
-  if (ex.healed > 0 && has(owned, 'vampire')) tags.push({ upgrade: 'vampire', text: `Vampire +${ex.healed}`, tone: 'good', side: 'player' })
-  if (ex.winner === 'player' && ex.damageDealt > 0 && fight.player.damageBonus > 0 && has(owned, 'sharpBlade')) {
-    const diff = ex.playerTotal - ex.enemyTotal
-    if (ex.damageDealt === diff * ex.playerCritFactor + fight.player.damageBonus) {
-      tags.push({ upgrade: 'sharpBlade', text: `Sharp Blade +${fight.player.damageBonus}`, tone: 'gold', side: 'player' })
-    }
-  }
-  if (ex.playerCrit && has(owned, 'loadedDice') && !hasDoubles(ex.playerFaces)) {
-    tags.push({ upgrade: 'loadedDice', text: 'Loaded Dice crit', tone: 'gold', side: 'player' })
-  }
-  if (ex.escaped && has(owned, 'escapeRope')) tags.push({ upgrade: 'escapeRope', text: 'Escape Rope!', tone: 'info', side: 'player' })
-  if (isKnockout(ex) && has(owned, 'finisher')) {
-    const extra = finisherBonus(fight)
-    if (extra > 0) tags.push({ upgrade: 'finisher', text: `Finisher +${trimNumber(extra)}x`, tone: 'gold', side: 'player' })
-  }
-  return tags
-}
-
-export function resultTags(result: Pick<FightResult, 'outcome' | 'payout'>, owned: Owned): UpgradeTag[] {
-  if (result.outcome === 'lost' && result.payout > 0 && has(owned, 'insurance')) {
-    return [{ upgrade: 'insurance', text: `Insurance +${result.payout}`, tone: 'good', side: 'player' }]
-  }
-  return []
-}
-
-export function fightStartTags(fight: Pick<FightState, 'player' | 'exchanges'>, owned: Owned): UpgradeTag[] {
-  if (fight.exchanges.length > 0) return []
-  const tags: UpgradeTag[] = []
-  const base = computeMods([])
-  const mods = computeMods(ownedIds(owned))
-  const extraHp = fight.player.maxHp - base.maxHp
-  if (extraHp > 0 && has(owned, 'vitality')) tags.push({ upgrade: 'vitality', text: `Vitality +${extraHp} HP`, tone: 'good', side: 'player' })
-  if (fight.player.minFace > base.minFace && has(owned, 'weightedDice')) {
-    tags.push({ upgrade: 'weightedDice', text: `Weighted Dice min ${fight.player.minFace}`, tone: 'info', side: 'player' })
-  }
-  if (mods.enemyHpCutPercent > 0 && has(owned, 'intimidate')) {
-    tags.push({ upgrade: 'intimidate', text: `Intimidate -${mods.enemyHpCutPercent}% HP`, tone: 'info', side: 'enemy' })
-  }
-  return tags
+  return ex.enemyHpAfter <= 0 && (ex.winner === 'player' || isRiposte(ex))
 }
 
 export function exchangeCues(ex: ExchangeRecord, status: FightStatus): Cue[] {
   const cues: Cue[] = []
-  if (ex.damageDealt > 0) cues.push(ex.playerCritFactor > 1 ? 'crit' : 'hitDealt')
-  if (ex.damageTaken > 0) {
+  const riposte = isRiposte(ex)
+  if (ex.damageDealt > 0 && !riposte) cues.push(ex.playerCritFactor > 1 ? 'crit' : 'hitDealt')
+  if (ex.damageTaken > 0 || ex.thornDamage > 0) {
     cues.push('hitTaken')
     if (ex.enemyCritFactor > 1) cues.push('crit')
   }
   if (ex.blocked > 0) cues.push('block')
   if (ex.healed > 0) cues.push('heal')
-  if (ex.escaped || status === 'escaped') cues.push('escape')
-  else if (status === 'won') cues.push('koWin')
+  if (riposte) cues.push('hitDealt')
+  if (status === 'won') cues.push('koWin')
   else if (status === 'lost') cues.push('koLoss')
   return cues
 }
@@ -119,9 +75,9 @@ export function transitionCues(next: Pick<GameState, 'phase' | 'gameOverReason' 
       return ['upgrade']
     case 'walkAway':
     case 'leave':
-    case 'skip':
-    case 'pawn':
       return ['coins']
+    case 'skip':
+      return []
   }
 }
 

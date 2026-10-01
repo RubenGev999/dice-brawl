@@ -1,5 +1,6 @@
 import { hashString } from '../core/index.ts'
-import type { EnemyTraitId, ExchangeRecord, FightStatus } from '../core/index.ts'
+import type { Archetype, EnemyTraitId, ExchangeRecord, FightStatus } from '../core/index.ts'
+import { critText, isRiposte } from './format.ts'
 
 export type BodyTemplate = 'humanoid' | 'beast' | 'blob' | 'skeleton' | 'golem' | 'caster'
 
@@ -80,7 +81,22 @@ const GENERIC_PALETTES: ReadonlyArray<Palette> = [
   pal('#c084fc', '#581c87', '#9333ea', '#f3e8ff', '#111827'),
   pal('#2dd4bf', '#134e4a', '#0d9488', '#ccfbf1', '#111827'),
   pal('#fb7185', '#881337', '#e11d48', '#ffe4e6', '#111827'),
-  pal('#94a3b8', '#334155', '#64748b', '#e2e8f0', '#111827'),
+  pal('#a8a29e', '#44403c', '#78716c', '#e7e5e4', '#111827'),
+  pal('#fdba74', '#9a3412', '#c2410c', '#fed7aa', '#111827'),
+  pal('#86efac', '#166534', '#16a34a', '#dcfce7', '#111827'),
+  pal('#7dd3fc', '#075985', '#0284c7', '#e0f2fe', '#111827'),
+  pal('#d8b4fe', '#6b21a8', '#a855f7', '#fae8ff', '#111827'),
+]
+
+const BOSS_PALETTES: ReadonlyArray<Palette> = [
+  pal('#7f1d1d', '#450a0a', '#991b1b', '#fca5a5', '#fde047'),
+  pal('#1e3a8a', '#172554', '#1d4ed8', '#93c5fd', '#fde047'),
+  pal('#14532d', '#052e16', '#166534', '#86efac', '#fde047'),
+  pal('#4c1d95', '#2e1065', '#6d28d9', '#c4b5fd', '#fbbf24'),
+  pal('#78350f', '#451a03', '#92400e', '#fcd34d', '#fecaca'),
+  pal('#831843', '#500724', '#9d174d', '#f9a8d4', '#fde047'),
+  pal('#164e63', '#083344', '#0e7490', '#67e8f9', '#fef08a'),
+  pal('#3f3f46', '#18181b', '#52525b', '#fb923c', '#ef4444'),
 ]
 
 const GENERIC_ACCESSORIES: ReadonlyArray<ReadonlyArray<Accessory>> = [
@@ -96,15 +112,24 @@ const GENERIC_ACCESSORIES: ReadonlyArray<ReadonlyArray<Accessory>> = [
 
 const BOSS_MARKS: ReadonlyArray<Accessory> = ['crown', 'horns']
 
-export function characterFor(name: string, isBoss = false): CharacterSpec {
+export function templateFor(archetype: Archetype, name: string): BodyTemplate {
+  if (archetype !== 'other') return archetype
+  return TEMPLATES[hashString(name) % TEMPLATES.length] as BodyTemplate
+}
+
+export function characterFor(name: string, isBoss = false, archetype: Archetype = 'other'): CharacterSpec {
   const known = ROSTER[name]
-  if (known) return known.boss === isBoss ? known : isBoss ? asBoss(known) : { ...known, boss: false, scale: 0.9 }
+  if (known) {
+    const fitted = archetype !== 'other' && known.template !== archetype ? { ...known, template: archetype } : known
+    return fitted.boss === isBoss ? fitted : isBoss ? asBoss(fitted) : { ...fitted, boss: false, scale: 0.9 }
+  }
   const h = hashString(name)
+  const pool = isBoss ? BOSS_PALETTES : GENERIC_PALETTES
   const base = spec(
     name,
-    TEMPLATES[h % TEMPLATES.length] as BodyTemplate,
-    GENERIC_PALETTES[(h >>> 3) % GENERIC_PALETTES.length] as Palette,
-    [...(GENERIC_ACCESSORIES[(h >>> 7) % GENERIC_ACCESSORIES.length] as ReadonlyArray<Accessory>)],
+    templateFor(archetype, name),
+    pool[(h >>> 9) % pool.length] as Palette,
+    [...(GENERIC_ACCESSORIES[(h >>> 13) % GENERIC_ACCESSORIES.length] as ReadonlyArray<Accessory>)],
     0.86,
   )
   return isBoss ? asBoss(base) : base
@@ -136,7 +161,23 @@ export function traitMarks(trait: EnemyTraitId): ReadonlyArray<string> {
       return ['regenGlow']
     case 'executioner':
       return ['mask']
-    default:
+    case 'frenzied':
+      return ['frenzy']
+    case 'leech':
+      return ['leechMark']
+    case 'thorny':
+      return ['thorns']
+    case 'cursed':
+      return ['curse']
+    case 'colossus':
+      return ['bulk', 'titanCracks']
+    case 'mighty':
+      return ['band']
+    case 'vampiric':
+      return ['bloodDrip']
+    case 'crusher':
+      return ['knuckles']
+    case 'plain':
       return []
   }
 }
@@ -342,6 +383,29 @@ export function characterSvg(character: CharacterSpec, trait: EnemyTraitId = 'pl
     const q = a.plate
     inner.push(`<path class="f-steel o" d="M${q.x} ${q.y} L${q.x + 26} ${q.y} L${q.x + 26} ${q.y + 20} Q${q.x + 13} ${q.y + 34} ${q.x} ${q.y + 20} Z"/><circle class="f-ink" cx="${q.x + 13}" cy="${q.y + 10}" r="2.5"/>`)
   }
+  const anchor = a.hand ?? a.plate
+  if (marks.includes('leechMark')) {
+    const q = a.plate
+    inner.push(`<path d="M${q.x + 4} ${q.y + 4} q6 -8 12 0 t12 0" fill="none" stroke="#14532d" stroke-width="6" stroke-linecap="round"/><circle cx="${q.x + 28}" cy="${q.y + 4}" r="3" fill="#bef264"/>`)
+  }
+  if (marks.includes('thorns')) {
+    const q = a.plate
+    for (let i = 0; i < 4; i++) {
+      const x = q.x - 6 + i * 12
+      inner.push(`<path d="M${x - 4} ${q.y + 22} L${x} ${q.y + 6} L${x + 4} ${q.y + 22} Z" fill="#65a30d" stroke="#1a2e05" stroke-width="2"/>`)
+    }
+  }
+  if (marks.includes('titanCracks')) {
+    const q = a.plate
+    inner.push(`<path d="M${q.x} ${q.y - 8} l8 12 l-6 8 l10 12 M${q.x + 22} ${q.y - 4} l-6 10 l8 6" fill="none" stroke="#0f172a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`)
+  }
+  if (marks.includes('band')) {
+    const q = a.plate
+    inner.push(`<rect x="${q.x - 6}" y="${q.y + 6}" width="38" height="8" rx="3" fill="#facc15" stroke="#713f12" stroke-width="2"/><rect x="${q.x + 7}" y="${q.y + 4}" width="12" height="12" rx="3" fill="#ef4444" stroke="#713f12" stroke-width="2"/>`)
+  }
+  if (marks.includes('knuckles')) {
+    inner.push(`<circle cx="${anchor.x}" cy="${anchor.y}" r="13" fill="#94a3b8" stroke="#0f172a" stroke-width="3"/>` + [-7, 0, 7].map((d) => `<path d="M${anchor.x + d - 3} ${anchor.y - 10} L${anchor.x + d} ${anchor.y - 20} L${anchor.x + d + 3} ${anchor.y - 10} Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="1.5"/>`).join(''))
+  }
   if (marks.includes('fist') && a.hand) inner.push(`<circle class="f-body o" cx="${a.hand.x}" cy="${a.hand.y}" r="11"/>`)
   const headParts: string[] = []
   for (const acc of character.accessories) {
@@ -349,6 +413,9 @@ export function characterSvg(character: CharacterSpec, trait: EnemyTraitId = 'pl
     if (part) headParts.push(part)
   }
   if (marks.includes('mask')) headParts.push('<rect class="f-ink" x="-22" y="-9" width="44" height="10" rx="3"/><rect class="rage-eye" x="-6" y="-6" width="6" height="3"/><rect class="rage-eye" x="8" y="-6" width="6" height="3"/>')
+  if (marks.includes('frenzy')) headParts.push('<path d="M-22 -28 L-8 -16 M22 -28 L8 -16 M-4 -34 L0 -22 L4 -34" fill="none" stroke="#ef4444" stroke-width="4" stroke-linecap="round"/>')
+  if (marks.includes('curse')) headParts.push('<circle cx="0" cy="-34" r="11" fill="none" stroke="#a855f7" stroke-width="3"/><path d="M-6 -40 L6 -28 M6 -40 L-6 -28" stroke="#a855f7" stroke-width="3" stroke-linecap="round"/>')
+  if (marks.includes('bloodDrip')) headParts.push('<path d="M-8 10 q0 10 3 14 q3 -4 3 -14 Z M10 10 q0 8 2.5 11 q2.5 -3 2.5 -11 Z" fill="#dc2626" stroke="#450a0a" stroke-width="1.5"/>')
   if (marks.includes('star')) headParts.push('<path class="f-gold o" d="M0 -46 L4 -37 L14 -36 L6 -30 L9 -20 L0 -26 L-9 -20 L-6 -30 L-14 -36 L-4 -37 Z"/>')
   if (headParts.length > 0) inner.push(headGroup(a, headParts.join('')))
   for (const acc of character.accessories) {
@@ -388,7 +455,6 @@ export type PlanStep =
       readonly floats: ReadonlyArray<FloatSpec>
     }
   | { readonly kind: 'ko'; readonly at: number; readonly side: Side }
-  | { readonly kind: 'dash'; readonly at: number; readonly side: Side }
 
 export interface Timeline {
   readonly windupAt: number
@@ -420,20 +486,27 @@ export function timelineFor(fast: boolean): Timeline {
 export function planExchange(ex: ExchangeRecord, end: FightStatus, timeline: Timeline = TIMELINE): PlanStep[] {
   const steps: PlanStep[] = [{ kind: 'windup', at: timeline.windupAt, sides: ['player', 'enemy'] }]
   const tie = ex.winner === 'tie'
+  const riposte = isRiposte(ex)
   const lunger: Side[] = tie ? ['player', 'enemy'] : ex.winner === 'player' ? ['player'] : ['enemy']
   steps.push({ kind: 'lunge', at: timeline.lungeAt, sides: lunger, bounce: tie })
   const floats: FloatSpec[] = []
   const hit: Side[] = []
   const block: Side[] = []
-  if (ex.damageDealt > 0) {
+  const label = critText(ex)
+  if (ex.damageDealt > 0 && !riposte) {
     hit.push('enemy')
     const crit = ex.playerCritFactor > 1
-    floats.push({ target: 'enemy', text: `-${ex.damageDealt}`, sub: crit ? `CRIT x${ex.playerCritFactor}` : null, tone: crit ? 'crit' : 'hit' })
+    const sub = crit ? label : ex.tieBreak ? 'Tie Breaker' : null
+    floats.push({ target: 'enemy', text: `-${ex.damageDealt}`, sub, tone: crit ? 'crit' : 'hit' })
   }
   if (ex.damageTaken > 0) {
     hit.push('player')
     const crit = ex.enemyCritFactor > 1
-    floats.push({ target: 'player', text: `-${ex.damageTaken}`, sub: crit ? `CRIT x${ex.enemyCritFactor}` : null, tone: crit ? 'crit' : 'hit' })
+    floats.push({ target: 'player', text: `-${ex.damageTaken}`, sub: crit ? label : null, tone: crit ? 'crit' : 'hit' })
+  }
+  if (ex.thornDamage > 0) {
+    if (!hit.includes('player')) hit.push('player')
+    floats.push({ target: 'player', text: `-${ex.thornDamage}`, sub: 'Thorns', tone: 'hit' })
   }
   if (ex.blocked > 0) {
     block.push('player')
@@ -441,13 +514,25 @@ export function planExchange(ex: ExchangeRecord, end: FightStatus, timeline: Tim
   }
   if (ex.healed > 0) floats.push({ target: 'player', text: `+${ex.healed}`, sub: null, tone: 'heal' })
   if (ex.enemyHealed > 0) floats.push({ target: 'enemy', text: `+${ex.enemyHealed}`, sub: null, tone: 'heal' })
-  const escaped = ex.escaped || end === 'escaped'
-  if (escaped) floats.push({ target: 'player', text: 'Escaped!', sub: null, tone: 'block' })
   if (tie) floats.unshift({ target: 'center', text: 'Tie', sub: null, tone: 'info' })
   const crit = ex.playerCritFactor > 1 || ex.enemyCritFactor > 1
   steps.push({ kind: 'impact', at: timeline.impactAt, hit, block, crit, shake: crit, floats })
-  if (escaped) steps.push({ kind: 'dash', at: timeline.endAt, side: 'player' })
-  else if (end === 'won') steps.push({ kind: 'ko', at: timeline.endAt, side: 'enemy' })
+  if (riposte) {
+    const gap = timeline.endAt - timeline.impactAt
+    const counterLunge = timeline.impactAt + Math.round(gap * 0.35)
+    const counterImpact = timeline.impactAt + Math.round(gap * 0.6)
+    steps.push({ kind: 'lunge', at: counterLunge, sides: ['player'], bounce: false })
+    steps.push({
+      kind: 'impact',
+      at: counterImpact,
+      hit: ['enemy'],
+      block: [],
+      crit: false,
+      shake: false,
+      floats: [{ target: 'enemy', text: `-${ex.riposteDamage}`, sub: 'Riposte', tone: 'hit' }],
+    })
+  }
+  if (end === 'won') steps.push({ kind: 'ko', at: timeline.endAt, side: 'enemy' })
   else if (end === 'lost') steps.push({ kind: 'ko', at: timeline.endAt, side: 'player' })
   return steps
 }
@@ -464,12 +549,12 @@ export interface RollChip {
   readonly text: string
 }
 
-export function rollChip(faces: ReadonlyArray<number>, before: ReadonlyArray<number> | null, total: number): RollChip {
+export function rollChip(faces: ReadonlyArray<number>, before: ReadonlyArray<number> | null, total: number, appliedBonus?: number): RollChip {
   const parts = faces.map((face, i): RollPart => {
     const b = before ? before[i] : undefined
     return { face, was: b !== undefined && b !== face ? b : null }
   })
-  const bonus = total - faces.reduce((sum, f) => sum + f, 0)
+  const bonus = appliedBonus ?? total - faces.reduce((sum, f) => sum + f, 0)
   let text = parts.map((p) => (p.was === null ? String(p.face) : `${p.face} (was ${p.was})`)).join(' + ')
   if (bonus !== 0) text += bonus > 0 ? ` + ${bonus}` : ` - ${-bonus}`
   text += ` = ${total}`

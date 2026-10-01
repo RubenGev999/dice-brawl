@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { computeMods, createGame, hasDoubles } from '../../core/index.ts'
-import type { ExchangeRecord, FightState, Game, UpgradeId } from '../../core/index.ts'
+import { UPGRADE_IDS, createGame } from '../../core/index.ts'
+import type { FightState, Game, UpgradeId } from '../../core/index.ts'
 import {
   PARTICLE_CAP,
   bossBanner,
@@ -9,178 +9,50 @@ import {
   coinBurstCount,
   confettiCount,
   exchangeCues,
-  exchangeTags,
-  finisherBonus,
   fightCelebration,
-  fightStartTags,
   isKnockout,
-  ownedFrom,
-  ownedIds,
-  resultTags,
   transitionCues,
+  triggerTags,
 } from '../effects.ts'
+import { exchange as ex } from './fixtures.ts'
 
-function ex(over: Partial<ExchangeRecord> = {}): ExchangeRecord {
-  return {
-    index: 0,
-    playerFaces: [4, 3],
-    playerFacesBeforeReroll: null,
-    rerolled: false,
-    enemyFaces: [2, 1],
-    playerTotal: 7,
-    enemyTotal: 3,
-    winner: 'player',
-    playerCrit: false,
-    enemyCrit: false,
-    playerCritFactor: 1,
-    enemyCritFactor: 1,
-    damageDealt: 4,
-    damageTaken: 0,
-    blocked: 0,
-    healed: 0,
-    enemyHealed: 0,
-    escaped: false,
-    playerHpAfter: 10,
-    enemyHpAfter: 4,
-    multiplierGained: 0.5,
-    multiplierGainedMilli: 500,
-    multiplierAfterMilli: 500,
-    ...over,
-  }
-}
+describe('trigger tags', () => {
+  it('has a style for every upgrade and keeps the core text verbatim', () => {
+    const tags = triggerTags(UPGRADE_IDS.map((id) => ({ id, text: `${id} text` })))
+    expect(tags.map((t) => t.upgrade)).toEqual([...UPGRADE_IDS])
+    for (const t of tags) {
+      expect(t.text).toBe(`${t.upgrade} text`)
+      expect(['good', 'bad', 'gold', 'info']).toContain(t.tone)
+      expect(['player', 'enemy']).toContain(t.side)
+    }
+  })
 
-function baseFight(): FightState {
-  const g = createGame(1, 100)
-  g.dispatch({ type: 'bet', amount: 25 })
-  return g.state.fight as FightState
-}
+  it('puts Intimidate on the enemy and every other trigger on the player', () => {
+    const tags = triggerTags(UPGRADE_IDS.map((id) => ({ id, text: id })))
+    expect(tags.filter((t) => t.side === 'enemy').map((t) => t.upgrade)).toEqual(['intimidate'])
+  })
 
-function owned(...ids: UpgradeId[]) {
-  return ownedFrom(ids.map((id) => ({ id })))
-}
-
-describe('owned helpers', () => {
-  it('counts copies and expands them back to ids', () => {
-    const o = owned('vitality', 'vitality', 'shield')
-    expect(o.vitality).toBe(2)
-    expect(o.shield).toBe(1)
-    expect(ownedIds(o).sort()).toEqual(['shield', 'vitality', 'vitality'])
-    expect(ownedIds({})).toEqual([])
+  it('maps nothing to nothing and keeps the order', () => {
+    expect(triggerTags([])).toEqual([])
+    const tags = triggerTags([
+      { id: 'shield', text: 'Shield -4' },
+      { id: 'riposte', text: 'Riposte 1' },
+    ])
+    expect(tags.map((t) => t.text)).toEqual(['Shield -4', 'Riposte 1'])
+    expect(tags[0]?.tone).toBe('info')
+    expect(tags[1]?.tone).toBe('gold')
   })
 })
 
-describe('upgrade tags from exchange records', () => {
-  const fight = baseFight()
-
-  it('tags nothing when no upgrade is owned', () => {
-    expect(exchangeTags(ex({ blocked: 3, healed: 3, rerolled: true, escaped: true }), fight, {})).toEqual([])
-  })
-
-  it('attributes a block to the shield with the blocked amount', () => {
-    const tags = exchangeTags(ex({ winner: 'enemy', damageDealt: 0, damageTaken: 2, blocked: 4 }), fight, owned('shield'))
-    expect(tags.map((t) => t.text)).toEqual(['Shield -4'])
-    expect(tags[0]?.upgrade).toBe('shield')
-    expect(tags[0]?.side).toBe('player')
-    expect(exchangeTags(ex({ blocked: 0 }), fight, owned('shield'))).toEqual([])
-  })
-
-  it('attributes a reroll to Second Wind', () => {
-    const tags = exchangeTags(ex({ rerolled: true, playerFacesBeforeReroll: [1, 2] }), fight, owned('secondWind'))
-    expect(tags.map((t) => t.upgrade)).toEqual(['secondWind'])
-    expect(tags[0]?.text).toBe('Second Wind')
-  })
-
-  it('attributes healing to the Vampire Fang with the healed amount and skips zero heals', () => {
-    expect(exchangeTags(ex({ healed: 3 }), fight, owned('vampire')).map((t) => t.text)).toEqual(['Vampire +3'])
-    expect(exchangeTags(ex({ healed: 0 }), fight, owned('vampire'))).toEqual([])
-  })
-
-  it('shows Sharp Blade only when its bonus is visible in the damage', () => {
-    const withBlade: FightState = { ...fight, player: { ...fight.player, damageBonus: 1 } }
-    const exact = ex({ playerTotal: 7, enemyTotal: 3, damageDealt: 5 })
-    expect(exchangeTags(exact, withBlade, owned('sharpBlade')).map((t) => t.text)).toEqual(['Sharp Blade +1'])
-    const crit = ex({ playerTotal: 7, enemyTotal: 3, playerCrit: true, playerCritFactor: 2, damageDealt: 9 })
-    expect(exchangeTags(crit, withBlade, owned('sharpBlade')).map((t) => t.text)).toEqual(['Sharp Blade +1'])
-    const reducedByTrait = ex({ playerTotal: 7, enemyTotal: 3, damageDealt: 3 })
-    expect(exchangeTags(reducedByTrait, withBlade, owned('sharpBlade'))).toEqual([])
-    const capped = ex({ playerTotal: 7, enemyTotal: 3, damageDealt: 2, enemyHpAfter: 0 })
-    expect(exchangeTags(capped, withBlade, owned('sharpBlade'))).toEqual([])
-    expect(exchangeTags(exact, fight, owned('sharpBlade'))).toEqual([])
-  })
-
-  it('shows Loaded Dice only for a crit without doubles', () => {
-    const noDoubles = ex({ playerFaces: [6, 5], playerTotal: 11, playerCrit: true, playerCritFactor: 2 })
-    expect(exchangeTags(noDoubles, fight, owned('loadedDice')).map((t) => t.text)).toEqual(['Loaded Dice crit'])
-    const doubles = ex({ playerFaces: [6, 6], playerTotal: 12, playerCrit: true, playerCritFactor: 2 })
-    expect(hasDoubles(doubles.playerFaces)).toBe(true)
-    expect(exchangeTags(doubles, fight, owned('loadedDice'))).toEqual([])
-    expect(exchangeTags(noDoubles, fight, {})).toEqual([])
-  })
-
-  it('shows Escape Rope on an escape', () => {
-    expect(exchangeTags(ex({ escaped: true, winner: 'enemy' }), fight, owned('escapeRope')).map((t) => t.text)).toEqual(['Escape Rope!'])
-  })
-
-  it('shows the Finisher bonus on a knockout using only the fight state', () => {
-    const mods = computeMods(['finisher'])
-    const base = computeMods([])
-    const extra = (mods.koBonusMilli - base.koBonusMilli) / 1000
-    const ko = ex({ enemyHpAfter: 0, damageDealt: 4 })
-    const boosted: FightState = { ...fight, koBonusMultiplier: fight.koBonusMultiplier + extra }
-    expect(isKnockout(ko)).toBe(true)
-    expect(finisherBonus(boosted)).toBeCloseTo(extra, 9)
-    expect(exchangeTags(ko, boosted, owned('finisher')).map((t) => t.text)).toEqual(['Finisher +0.3x'])
-    expect(exchangeTags(ex({ enemyHpAfter: 2 }), boosted, owned('finisher'))).toEqual([])
-    expect(finisherBonus(fight)).toBe(0)
-    expect(exchangeTags(ko, fight, owned('finisher'))).toEqual([])
-  })
-
-  it('stacks several tags in one exchange', () => {
-    const f: FightState = { ...fight, player: { ...fight.player, damageBonus: 1 } }
-    const tags = exchangeTags(ex({ healed: 3, damageDealt: 5 }), f, owned('vampire', 'sharpBlade'))
-    expect(tags.map((t) => t.upgrade).sort()).toEqual(['sharpBlade', 'vampire'])
-  })
-})
-
-describe('result and fight-start tags', () => {
-  it('shows Insurance on a lost fight that paid a refund', () => {
-    expect(resultTags({ outcome: 'lost', payout: 20 }, owned('insurance')).map((t) => t.text)).toEqual(['Insurance +20'])
-    expect(resultTags({ outcome: 'lost', payout: 0 }, owned('insurance'))).toEqual([])
-    expect(resultTags({ outcome: 'won', payout: 90 }, owned('insurance'))).toEqual([])
-    expect(resultTags({ outcome: 'lost', payout: 20 }, {})).toEqual([])
-  })
-
-  it('tags passive upgrades once at the start of a fight', () => {
-    const base = baseFight()
-    const upgraded: FightState = { ...base, player: { ...base.player, maxHp: base.player.maxHp + 3, minFace: 2 } }
-    const tags = fightStartTags(upgraded, owned('vitality', 'weightedDice', 'intimidate'))
-    expect(tags.map((t) => t.text)).toEqual(['Vitality +3 HP', 'Weighted Dice min 2', `Intimidate -${computeMods(['intimidate']).enemyHpCutPercent}% HP`])
-    expect(tags.find((t) => t.upgrade === 'intimidate')?.side).toBe('enemy')
-    expect(fightStartTags(base, {})).toEqual([])
-    expect(fightStartTags({ ...upgraded, exchanges: [ex()] }, owned('vitality'))).toEqual([])
-    expect(fightStartTags(base, owned('vitality'))).toEqual([])
-  })
-
-  it('scales the intimidate label with stacked copies', () => {
-    const base = baseFight()
-    const one = fightStartTags(base, owned('intimidate'))[0]?.text
-    const two = fightStartTags(base, owned('intimidate', 'intimidate'))[0]?.text
-    expect(one).toBe(`Intimidate -${computeMods(['intimidate']).enemyHpCutPercent}% HP`)
-    expect(two).toBe(`Intimidate -${computeMods(['intimidate', 'intimidate']).enemyHpCutPercent}% HP`)
-  })
-})
-
-describe('tags against a real core game', () => {
+describe('triggers against a real core game', () => {
   function botStep(game: Game, i: number): void {
     const s = game.state
-    if (s.phase === 'bet') {
-      if (s.canPawn) game.dispatch({ type: 'pawn', index: 0 })
-      else game.dispatch({ type: 'bet', amount: (s.betPresets[1] ?? s.betPresets[0])?.amount ?? 1 })
-    } else if (s.phase === 'result' || s.phase === 'checkpoint') game.dispatch({ type: 'continue' })
+    if (s.phase === 'bet') game.dispatch({ type: 'bet', amount: (s.betPresets[1] ?? s.betPresets[0])?.amount ?? 1 })
+    else if (s.phase === 'result' || s.phase === 'checkpoint') game.dispatch({ type: 'continue' })
     else if (s.phase === 'shop') game.dispatch(s.shopOffers.length > 0 ? { type: 'pickUpgrade', index: i % s.shopOffers.length } : { type: 'skip' })
   }
 
-  it('only ever attributes what the exposed fields prove', () => {
+  it('maps every trigger the core reports to an owned upgrade', () => {
     const seen = new Set<UpgradeId>()
     let exchanges = 0
     for (let seed = 1; seed <= 80; seed++) {
@@ -188,31 +60,54 @@ describe('tags against a real core game', () => {
       let guard = 0
       while (game.state.phase !== 'gameover' && guard++ < 400) {
         if (game.state.phase === 'fight') {
-          const o = ownedFrom(game.state.upgrades)
+          const owned = new Set(game.state.upgrades.map((u) => u.id))
           game.dispatch({ type: 'roll' })
           const f = game.state.fight as FightState
-          const e = f.exchanges[f.exchanges.length - 1] as ExchangeRecord
+          const e = f.exchanges[f.exchanges.length - 1]
+          if (!e) continue
           exchanges += 1
-          const tags = exchangeTags(e, f, o)
-          const by = new Map(tags.map((t) => [t.upgrade, t]))
-          for (const t of tags) seen.add(t.upgrade)
-          expect(by.has('shield')).toBe(e.blocked > 0 && (o.shield ?? 0) > 0)
-          expect(by.has('vampire')).toBe(e.healed > 0 && (o.vampire ?? 0) > 0)
-          expect(by.has('secondWind')).toBe(e.rerolled && (o.secondWind ?? 0) > 0)
-          expect(by.has('escapeRope')).toBe(e.escaped && (o.escapeRope ?? 0) > 0)
-          if (by.has('loadedDice')) expect(e.playerCrit && !hasDoubles(e.playerFaces)).toBe(true)
-          if (by.has('sharpBlade')) expect(e.damageDealt).toBe(e.playerTotal - e.enemyTotal + f.player.damageBonus + (e.playerCritFactor - 1) * (e.playerTotal - e.enemyTotal))
-          if (by.has('finisher')) expect(isKnockout(e)).toBe(true)
-          if (f.status === 'lost' || f.status === 'escaped' || f.status === 'won') {
-            expect(exchangeCues(e, f.status).length).toBeGreaterThan(0)
+          for (const t of triggerTags(e.upgradeTriggers)) {
+            seen.add(t.upgrade)
+            expect(owned.has(t.upgrade), t.upgrade).toBe(true)
+            expect(t.text.length).toBeGreaterThan(0)
           }
+          if (f.status === 'lost' || f.status === 'won') expect(exchangeCues(e, f.status).length).toBeGreaterThan(0)
         } else {
           botStep(game, guard)
         }
       }
     }
     expect(exchanges).toBeGreaterThan(500)
-    expect(seen.size).toBeGreaterThanOrEqual(4)
+    expect(seen.size).toBeGreaterThanOrEqual(6)
+  })
+
+  it('reads fight-start triggers from the fight state', () => {
+    let found = false
+    for (let seed = 1; seed <= 200 && !found; seed++) {
+      const game = createGame(seed, 1000)
+      let guard = 0
+      while (game.state.phase !== 'gameover' && guard++ < 200 && !found) {
+        if (game.state.phase === 'fight') {
+          const f = game.state.fight as FightState
+          if (f.startTriggers.length > 0) {
+            found = true
+            const tags = triggerTags(f.startTriggers)
+            expect(tags.every((t) => t.upgrade === 'vitality' || t.upgrade === 'intimidate')).toBe(true)
+          }
+          game.dispatch({ type: 'roll' })
+        } else botStep(game, guard)
+      }
+    }
+    expect(found).toBe(true)
+  })
+})
+
+describe('knockouts', () => {
+  it('counts a player knockout and a riposte knockout', () => {
+    expect(isKnockout(ex({ enemyHpAfter: 0 }))).toBe(true)
+    expect(isKnockout(ex({ enemyHpAfter: 2 }))).toBe(false)
+    expect(isKnockout(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 2, enemyHpAfter: 0 }))).toBe(true)
+    expect(isKnockout(ex({ winner: 'enemy', damageDealt: 0, damageTaken: 2, enemyHpAfter: 0 }))).toBe(false)
   })
 })
 
@@ -227,7 +122,12 @@ describe('cues', () => {
     expect(exchangeCues(ex({ winner: 'tie', damageDealt: 0 }), 'active')).toEqual([])
     expect(exchangeCues(ex({ enemyHpAfter: 0 }), 'won')).toEqual(['hitDealt', 'koWin'])
     expect(exchangeCues(ex({ winner: 'enemy', damageDealt: 0, damageTaken: 2 }), 'lost')).toEqual(['hitTaken', 'koLoss'])
-    expect(exchangeCues(ex({ winner: 'enemy', damageDealt: 0, damageTaken: 2, escaped: true }), 'escaped')).toEqual(['hitTaken', 'escape'])
+  })
+
+  it('plays the enemy hit before a riposte and a thorn hit as damage taken', () => {
+    expect(exchangeCues(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 2 }), 'active')).toEqual(['hitTaken', 'hitDealt'])
+    expect(exchangeCues(ex({ winner: 'enemy', damageDealt: 1, riposteDamage: 1, damageTaken: 2, enemyCritFactor: 2 }), 'active')).toEqual(['hitTaken', 'crit', 'hitDealt'])
+    expect(exchangeCues(ex({ thornDamage: 1 }), 'active')).toEqual(['hitDealt', 'hitTaken'])
   })
 
   it('maps actions to cues', () => {
@@ -242,7 +142,8 @@ describe('cues', () => {
     expect(transitionCues({ ...none, phase: 'gameover', gameOverReason: 'checkpoint' }, { type: 'continue' })).toEqual(['failed'])
     expect(transitionCues({ ...none, phase: 'shop' }, { type: 'continue' })).toEqual([])
     expect(transitionCues(none, { type: 'pickUpgrade', index: 0 })).toEqual(['upgrade'])
-    expect(transitionCues(none, { type: 'skip' })).toEqual(['coins'])
+    expect(transitionCues(none, { type: 'skip' })).toEqual([])
+    expect(transitionCues(none, { type: 'walkAway' })).toEqual(['coins'])
     expect(transitionCues(none, { type: 'leave' })).toEqual(['coins'])
   })
 })
@@ -253,7 +154,6 @@ describe('celebrations', () => {
     expect(fightCelebration('won', true)).toBe('boss')
     expect(fightCelebration('lost', false)).toBe('loss')
     expect(fightCelebration('walkedAway', false)).toBe('none')
-    expect(fightCelebration('escaped', true)).toBe('none')
     expect(coinBurstCount('boss')).toBeGreaterThan(coinBurstCount('ko'))
     expect(coinBurstCount('ko')).toBeGreaterThan(0)
     expect(coinBurstCount('loss')).toBe(0)
@@ -271,7 +171,7 @@ describe('celebrations', () => {
     expect(coinBurstCount('boss')).toBeLessThanOrEqual(PARTICLE_CAP)
   })
 
-  it('counts a checkpoint bankroll up from the stage entry', () => {
+  it('counts a checkpoint bankroll up from the level entry', () => {
     expect(checkpointCountRange({ entryBankroll: 100 }, 130)).toEqual({ from: 100, to: 130 })
     expect(checkpointCountRange({ entryBankroll: 200 }, 130)).toEqual({ from: 130, to: 130 })
   })
