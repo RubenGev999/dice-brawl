@@ -179,8 +179,12 @@ export function checkpointNet(bankroll: number, buyIn: number): string {
   return `${formatNet(bankroll - buyIn)} vs your buy-in of ${formatCoins(buyIn)}`
 }
 
-export function leaveLabel(bankroll: number): string {
-  return `Leave with ${coinsText(bankroll)}`
+export function leaveLabel(bankroll: number, fee = 0): string {
+  return `Leave with ${coinsText(bankroll - fee)}`
+}
+
+export function leaveFeeLine(fee: number, percent: number): string {
+  return `${percent}% fee: -${coinsText(fee)}`
 }
 
 export function continueLabel(nextLevel: number): string {
@@ -237,7 +241,12 @@ export function gameOverText(
   }
   if (reason === 'broke') return 'You ran out of coins. No coins come back from this run.'
   if (reason === 'left') {
-    return cashOut === null ? 'You left after a cleared level. Leaving is free.' : `You left after a cleared level and took all ${coinsText(cashOut)}. Leaving is free.`
+    if (cashOut === null) return 'You left after a cleared level.'
+    if (fee !== null && fee > 0) {
+      const share = feePercent === null ? 'A fee' : `A ${feePercent}% fee`
+      return `You left after a cleared level. ${share} (${coinsText(fee)}) was withheld, so you took ${coinsText(cashOut)}.`
+    }
+    return `You left after a cleared level and took all ${coinsText(cashOut)}.`
   }
   return 'The run is over.'
 }
@@ -249,7 +258,7 @@ export interface SummaryRow {
 }
 
 export function returnRows(
-  s: Pick<GameState, 'gameOverReason' | 'cashOut' | 'cashOutFee' | 'failedCheckpointFeePercent' | 'buyIn' | 'lastCheckpoint'>,
+  s: Pick<GameState, 'gameOverReason' | 'cashOut' | 'cashOutFee' | 'failedCheckpointFeePercent' | 'leaveFeePercent' | 'buyIn' | 'lastCheckpoint'>,
 ): SummaryRow[] {
   const cashOut = s.cashOut ?? 0
   const fee = s.cashOutFee ?? 0
@@ -259,6 +268,10 @@ export function returnRows(
     const bankroll = s.lastCheckpoint ? s.lastCheckpoint.bankroll : cashOut + fee
     rows.push({ label: 'Bankroll at the end', value: formatCoins(bankroll) })
     rows.push({ label: `Fee withheld (${s.failedCheckpointFeePercent}%)`, value: fee > 0 ? `-${formatCoins(fee)}` : '0', tone: fee > 0 ? 'bad' : undefined })
+  }
+  if (s.gameOverReason === 'left') {
+    rows.push({ label: 'Bankroll at the end', value: formatCoins(cashOut + fee) })
+    rows.push({ label: `Fee withheld (${s.leaveFeePercent}%)`, value: fee > 0 ? `-${formatCoins(fee)}` : '0', tone: fee > 0 ? 'bad' : undefined })
   }
   rows.push({ label: 'Coins returned', value: formatCoins(cashOut) })
   rows.push({ label: 'Buy-in', value: formatCoins(s.buyIn) })
@@ -282,8 +295,8 @@ export function feeWarning(percent: number): string {
   return `Miss the target and ${percent}% of your coins are withheld`
 }
 
-export function leaveFreeLine(): string {
-  return 'Leaving now is free. Continue only if you want to risk the next level.'
+export function leaveNoteLine(fee: number, percent: number): string {
+  return `Leaving now costs a ${percent}% fee (${coinsText(fee)}). Continue only if you want to risk the next level.`
 }
 
 export type LobbyState = 'play' | 'refill'

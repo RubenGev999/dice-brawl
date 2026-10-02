@@ -22,6 +22,7 @@ import {
   isUseful,
   isValidBuyIn,
   koMultiplierMilliForLevel,
+  leaveFee,
   levelDef,
   levelInfo,
   lossPayoutAt,
@@ -106,6 +107,8 @@ describe('buy-in and version', () => {
       expect(s.target).toBe(Math.floor((buyIn * (100 + L1.targetGrowthPercent)) / 100))
       expect(s.minBet).toBe(Math.ceil((buyIn * CONFIG.minBetPercent) / 100))
       expect(s.maxBet).toBe(buyIn)
+      expect(s.leaveFeePercent).toBe(CONFIG.leaveFeePercent)
+      expect(s.leaveFee).toBe(0)
       expect(s.cashOut).toBeNull()
       expect(s.cashOutFee).toBeNull()
       expect(s.failedCheckpointFeePercent).toBe(CONFIG.failedCheckpointFeePercent)
@@ -691,6 +694,19 @@ describe('failed checkpoint fee', () => {
   })
 })
 
+describe('leave fee', () => {
+  it('withholds the leave fee percent, flooring the amount returned', () => {
+    const pct = CONFIG.leaveFeePercent
+    expect(pct).toBe(5)
+    for (const b of [0, 1, 19, 20, 21, 100, 105, 1000, 123457]) {
+      expect(b - leaveFee(b)).toBe(Math.floor((b * (100 - pct)) / 100))
+    }
+    expect(leaveFee(1)).toBe(1)
+    expect(leaveFee(105)).toBe(6)
+    expect(leaveFee(1000)).toBe(50)
+  })
+})
+
 describe('run layer', () => {
   it('a stage is four normal fights and a boss', () => {
     const g = createGame(11)
@@ -752,10 +768,14 @@ describe('run layer', () => {
     expect(s.lastCheckpoint?.target).toBe(targetForStage(1, 100))
     expect(s.stage).toBe(2)
     expect(s.target).toBe(targetForStage(2, s.bankroll))
+    expect(s.leaveFeePercent).toBe(CONFIG.leaveFeePercent)
+    expect(s.leaveFee).toBe(leaveFee(s.bankroll))
     const leave = clone(g)
     expect(leave.dispatch({ type: 'leave' })).toBe(true)
     expect(leave.state.gameOverReason).toBe('left')
-    expect(leave.state.cashOut).toBe(s.bankroll)
+    expect(leave.state.cashOut).toBe(s.bankroll - leaveFee(s.bankroll))
+    expect(leave.state.cashOutFee).toBe(leaveFee(s.bankroll))
+    expect(leave.state.leaveFee).toBe(0)
     expect(g.dispatch({ type: 'continue' })).toBe(true)
     expect(g.state.phase).toBe('shop')
   })

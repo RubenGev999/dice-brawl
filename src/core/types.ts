@@ -264,6 +264,8 @@ export interface GameState {
   readonly upgrades: ReadonlyArray<Upgrade>
   readonly shopOffers: ReadonlyArray<ShopOffer>
   readonly canLeave: boolean
+  readonly leaveFeePercent: number
+  readonly leaveFee: number
   readonly lastResult: FightResult | null
   readonly lastCheckpoint: CheckpointResult | null
   readonly gameOverReason: GameOverReason

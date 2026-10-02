@@ -23,7 +23,7 @@ export function koMultiplierMilliForLevel(level: number, isBoss: boolean): numbe
 
 export function enemyBonusMilliFor(level: number, fightInLevel: number): number {
   const d = levelDef(level)
-  const base = d.enemyBonusMilli + fightInLevel * CONFIG.enemyBonusStepMilli
+  const base = d.enemyBonusMilli + fightInLevel * d.enemyBonusStepMilli
   return fightInLevel === CONFIG.fightsPerStage - 1 ? base + d.bossBonusMilli : base
 }
 

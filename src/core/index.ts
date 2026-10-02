@@ -7,6 +7,7 @@ export {
   clampBet,
   minBetFor,
   failedCheckpointFee,
+  leaveFee,
   maxBetFor,
   isValidBuyIn,
   targetForStage,

@@ -757,6 +757,7 @@ body {
 }
 
 .free-note {
+  opacity: 0.9;
   color: var(--good);
 }
 
@@ -2128,4 +2129,10 @@ button:focus-visible {
 
 .levels-note {
   font-size: 12px;
+}
+
+.leave-fee-line {
+  text-align: center;
+  font-size: 0.8rem;
+  opacity: 0.8;
 }

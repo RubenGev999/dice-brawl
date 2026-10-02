@@ -4,7 +4,7 @@ export const TICKS_PER_SECOND = 60
 
 export const MILLI = 1000
 
-export const RULES_VERSION = '2.0.0-levels'
+export const RULES_VERSION = '2.1.0-house-edge'
 
 export interface LevelDef {
   readonly label: string
@@ -17,6 +17,7 @@ export interface LevelDef {
   readonly bossBonusMilli: number
   readonly enemyHpBonus: number
   readonly plainWeight: number
+  readonly enemyBonusStepMilli: number
 }
 
 export const CONFIG = {
@@ -32,6 +33,7 @@ export const CONFIG = {
   betPresetPercents: { low: 10, medium: 25, high: 50 },
 
   failedCheckpointFeePercent: 10,
+  leaveFeePercent: 5,
 
   playerBaseHp: 10,
   playerBaseDice: [6, 6] as readonly number[],
@@ -42,14 +44,14 @@ export const CONFIG = {
   critFactor: 2,
 
   levels: [
-    { label: 'Easy', fullKoMilli: 1400, koBonusMilli: 200, bossFullKoMilli: 2000, bossKoBonusMilli: 500, targetGrowthPercent: 4, enemyBonusMilli: -370, bossBonusMilli: 270, enemyHpBonus: 0, plainWeight: 6 },
-    { label: 'Normal', fullKoMilli: 1500, koBonusMilli: 200, bossFullKoMilli: 2100, bossKoBonusMilli: 600, targetGrowthPercent: 4, enemyBonusMilli: 1060, bossBonusMilli: 210, enemyHpBonus: 1, plainWeight: 4 },
-    { label: 'Tricky', fullKoMilli: 1600, koBonusMilli: 200, bossFullKoMilli: 2200, bossKoBonusMilli: 700, targetGrowthPercent: 4, enemyBonusMilli: 2240, bossBonusMilli: 120, enemyHpBonus: 2, plainWeight: 3 },
-    { label: 'Hard', fullKoMilli: 1700, koBonusMilli: 200, bossFullKoMilli: 2300, bossKoBonusMilli: 800, targetGrowthPercent: 5, enemyBonusMilli: 3380, bossBonusMilli: 0, enemyHpBonus: 2, plainWeight: 2 },
-    { label: 'Brutal', fullKoMilli: 1800, koBonusMilli: 200, bossFullKoMilli: 2400, bossKoBonusMilli: 900, targetGrowthPercent: 5, enemyBonusMilli: 4380, bossBonusMilli: -330, enemyHpBonus: 3, plainWeight: 2 },
-    { label: 'Savage', fullKoMilli: 1900, koBonusMilli: 200, bossFullKoMilli: 2500, bossKoBonusMilli: 1000, targetGrowthPercent: 6, enemyBonusMilli: 5400, bossBonusMilli: -640, enemyHpBonus: 3, plainWeight: 1 },
-    { label: 'Nightmare', fullKoMilli: 2000, koBonusMilli: 200, bossFullKoMilli: 2600, bossKoBonusMilli: 1100, targetGrowthPercent: 6, enemyBonusMilli: 5460, bossBonusMilli: -760, enemyHpBonus: 4, plainWeight: 1 },
-    { label: 'Abyss', fullKoMilli: 2100, koBonusMilli: 200, bossFullKoMilli: 2700, bossKoBonusMilli: 1200, targetGrowthPercent: 7, enemyBonusMilli: 5540, bossBonusMilli: -760, enemyHpBonus: 4, plainWeight: 1 },
+    { label: 'Easy', fullKoMilli: 1400, koBonusMilli: 200, bossFullKoMilli: 2000, bossKoBonusMilli: 500, targetGrowthPercent: 4, enemyBonusMilli: -490, enemyBonusStepMilli: 370, bossBonusMilli: 150, enemyHpBonus: 0, plainWeight: 6 },
+    { label: 'Normal', fullKoMilli: 1500, koBonusMilli: 200, bossFullKoMilli: 2100, bossKoBonusMilli: 600, targetGrowthPercent: 4, enemyBonusMilli: 1300, enemyBonusStepMilli: 230, bossBonusMilli: 240, enemyHpBonus: 1, plainWeight: 4 },
+    { label: 'Tricky', fullKoMilli: 1600, koBonusMilli: 200, bossFullKoMilli: 2200, bossKoBonusMilli: 700, targetGrowthPercent: 4, enemyBonusMilli: 2610, enemyBonusStepMilli: 290, bossBonusMilli: 10, enemyHpBonus: 2, plainWeight: 3 },
+    { label: 'Hard', fullKoMilli: 1700, koBonusMilli: 200, bossFullKoMilli: 2300, bossKoBonusMilli: 800, targetGrowthPercent: 5, enemyBonusMilli: 3960, enemyBonusStepMilli: 280, bossBonusMilli: -270, enemyHpBonus: 2, plainWeight: 2 },
+    { label: 'Brutal', fullKoMilli: 1800, koBonusMilli: 200, bossFullKoMilli: 2400, bossKoBonusMilli: 900, targetGrowthPercent: 5, enemyBonusMilli: 5070, enemyBonusStepMilli: 130, bossBonusMilli: 10, enemyHpBonus: 3, plainWeight: 2 },
+    { label: 'Savage', fullKoMilli: 1900, koBonusMilli: 200, bossFullKoMilli: 2500, bossKoBonusMilli: 1000, targetGrowthPercent: 6, enemyBonusMilli: 5750, enemyBonusStepMilli: 30, bossBonusMilli: -160, enemyHpBonus: 3, plainWeight: 1 },
+    { label: 'Nightmare', fullKoMilli: 2000, koBonusMilli: 200, bossFullKoMilli: 2600, bossKoBonusMilli: 1100, targetGrowthPercent: 6, enemyBonusMilli: 5830, enemyBonusStepMilli: 0, bossBonusMilli: -130, enemyHpBonus: 4, plainWeight: 1 },
+    { label: 'Abyss', fullKoMilli: 2100, koBonusMilli: 200, bossFullKoMilli: 2700, bossKoBonusMilli: 1200, targetGrowthPercent: 7, enemyBonusMilli: 5840, enemyBonusStepMilli: 40, bossBonusMilli: -210, enemyHpBonus: 4, plainWeight: 1 },
   ] as ReadonlyArray<LevelDef>,
   levelOverflowBonusMilli: 400,
   levelOverflowHpEvery: 2,
@@ -57,7 +59,6 @@ export const CONFIG = {
   enemyDice: [6, 6] as readonly number[],
   enemyBaseHp: 8,
   enemyHpSpread: 2,
-  enemyBonusStepMilli: 250,
   enemyMinHp: 3,
   bossExtraHp: 4,
 

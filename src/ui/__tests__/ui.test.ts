@@ -30,7 +30,8 @@ import {
   groupUpgrades,
   hpPercent,
   hudView,
-  leaveFreeLine,
+  leaveFeeLine,
+  leaveNoteLine,
   leaveLabel,
   levelFullProfileLine,
   levelProfileLine,
@@ -218,7 +219,8 @@ describe('screen text', () => {
     expect(gameOverText('broke', null, 0, 0, 10)).toContain('No coins come back')
     expect(gameOverText('broke', null, 0, 0, 10)).not.toContain('pawn')
     expect(gameOverText('left', null, 1234, 0, 10)).toContain('1,234')
-    expect(gameOverText('left', null, 1234, 0, 10)).toContain('free')
+    expect(gameOverText('left', null, 1234, 60, 5)).toContain('A 5% fee (60 coins) was withheld, so you took 1,234 coins.')
+    expect(gameOverText('left', null, 1234, 60, 5).toLowerCase()).not.toContain('free')
     expect(gameOverText(null, null)).toBe('The run is over.')
     expect(gameOverTitle('checkpoint')).toBe('Checkpoint failed')
     expect(gameOverTitle('broke')).toBe('Out of coins')
@@ -363,12 +365,17 @@ function findCheckpointGame(): Game {
 }
 
 describe('fee and fee rows text', () => {
-  const base = { failedCheckpointFeePercent: 10, buyIn: 100 }
+  const base = { failedCheckpointFeePercent: 10, leaveFeePercent: 5, buyIn: 100 }
   const cp: CheckpointResult = { stage: 1, entryBankroll: 100, target: 107, bankroll: 95, outcome: 'failed' }
-  it('writes the fee warning and the free-leave line', () => {
+  it('writes the fee warning and the leave fee note', () => {
     expect(feeWarning(10)).toBe('Miss the target and 10% of your coins are withheld')
     expect(feeWarning(15)).toContain('15%')
-    expect(leaveFreeLine().toLowerCase()).toContain('free')
+    expect(leaveNoteLine(17, 5)).toContain('5% fee (17 coins)')
+    expect(leaveNoteLine(17, 5).toLowerCase()).not.toContain('free')
+  })
+  it('lists a left run with the fee row', () => {
+    const rows = returnRows({ ...base, gameOverReason: 'left', cashOut: 95, cashOutFee: 5, lastCheckpoint: null })
+    expect(rows.map((r) => `${r.label}=${r.value}`)).toEqual(['Bankroll at the end=100', 'Fee withheld (5%)=-5', 'Coins returned=95', 'Buy-in=100', 'Net vs buy-in=-5'])
   })
   it('lists a failed checkpoint with bankroll, fee, returned coins and net', () => {
     const rows = returnRows({ ...base, gameOverReason: 'checkpoint', cashOut: 86, cashOutFee: 10, lastCheckpoint: { ...cp, bankroll: 96 } })
@@ -387,11 +394,11 @@ describe('fee and fee rows text', () => {
     expect(rows.map((r) => r.value)).toEqual(['0', '0', '0', '100', '-100'])
     expect(rows[1]?.tone).toBeUndefined()
   })
-  it('left and broke have no fee row', () => {
-    const left = returnRows({ ...base, gameOverReason: 'left', cashOut: 184, cashOutFee: 0, lastCheckpoint: { ...cp, outcome: 'passed', bankroll: 184 } })
-    expect(left.map((r) => r.label)).toEqual(['Coins returned', 'Buy-in', 'Net vs buy-in'])
-    expect(left[2]?.value).toBe('+84')
-    expect(left[2]?.tone).toBe('good')
+  it('broke has no fee row and left shows one', () => {
+    const left = returnRows({ ...base, gameOverReason: 'left', cashOut: 184, cashOutFee: 10, lastCheckpoint: { ...cp, outcome: 'passed', bankroll: 194 } })
+    expect(left.map((r) => r.label)).toEqual(['Bankroll at the end', 'Fee withheld (5%)', 'Coins returned', 'Buy-in', 'Net vs buy-in'])
+    expect(left[4]?.value).toBe('+84')
+    expect(left[4]?.tone).toBe('good')
     const broke = returnRows({ ...base, gameOverReason: 'broke', cashOut: 0, cashOutFee: 0, lastCheckpoint: null })
     expect(broke.map((r) => r.label)).toEqual(['Coins returned', 'Buy-in', 'Net vs buy-in'])
     expect(broke[0]?.value).toBe('0')
@@ -525,7 +532,9 @@ describe('helpers accept real game state', () => {
     expect(s.lastResult?.isBoss).toBe(true)
     expect(checkpointHeadline(s.lastCheckpoint)).toBe('Level 1 cleared')
     expect(stageNotice(s)).toBe(`Level 1 cleared, new target ${formatCoins(s.target)}`)
-    expect(leaveLabel(s.bankroll)).toBe(`Leave with ${coinsText(s.bankroll)}`)
+    expect(s.leaveFee).toBeGreaterThan(0)
+    expect(leaveLabel(s.bankroll, s.leaveFee)).toBe(`Leave with ${coinsText(s.bankroll - s.leaveFee)}`)
+    expect(leaveFeeLine(s.leaveFee, s.leaveFeePercent)).toBe(`${s.leaveFeePercent}% fee: -${coinsText(s.leaveFee)}`)
     expect(continueLabel(s.stage)).toBe('Continue to level 2')
     expect(nextTargetLine(s)).toContain(formatCoins(s.target))
     expect(checkpointNet(s.bankroll, s.buyIn)).toMatch(/^[+-][\d,]+ vs your buy-in of 100$/)
@@ -533,14 +542,16 @@ describe('helpers accept real game state', () => {
     expect(fightPips(s).map((p) => p.state)).toEqual(['current', 'todo', 'todo', 'todo', 'todo'])
     expect(g.dispatch({ type: 'bet', amount: 5 })).toBe(false)
     const bank = s.bankroll
+    const fee = s.leaveFee
     expect(g.dispatch({ type: 'leave' })).toBe(true)
     const end = g.state
     expect(end.phase).toBe('gameover')
     expect(end.gameOverReason).toBe('left')
-    expect(end.cashOut).toBe(bank)
+    expect(end.cashOut).toBe(bank - fee)
+    expect(end.cashOutFee).toBe(fee)
     expect(end.stagesCleared).toBe(1)
     expect(end.bossesDefeated).toBeGreaterThanOrEqual(0)
-    expect(gameOverText(end.gameOverReason, end.lastCheckpoint, end.cashOut)).toContain(formatCoins(bank))
+    expect(gameOverText(end.gameOverReason, end.lastCheckpoint, end.cashOut, end.cashOutFee, end.leaveFeePercent)).toContain(formatCoins(bank - fee))
     expect(gameOverTitle(end.gameOverReason)).toBe('You left the arena')
     expect(formatNet((end.cashOut ?? 0) - end.buyIn)).toMatch(/^[+-][\d,]+$/)
     expect(end.peakBankroll).toBeGreaterThanOrEqual(bank)

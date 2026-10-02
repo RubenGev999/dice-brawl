@@ -23,7 +23,8 @@ import {
   gameOverTitle,
   hpPercent,
   hudView,
-  leaveFreeLine,
+  leaveFeeLine,
+  leaveNoteLine,
   leaveLabel,
   levelFullProfileLine,
   levelProfileLine,
@@ -874,14 +875,15 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     rows.append(row('Buy-in', formatCoins(s.buyIn)))
     card.append(rows)
     card.append(h('div', 'net-line ' + (s.bankroll >= s.buyIn ? 'good-text' : 'bad-text'), 'Net so far ' + checkpointNet(s.bankroll, s.buyIn)))
-    card.append(h('div', 'card-sub free-note', leaveFreeLine()))
+    card.append(h('div', 'card-sub free-note', leaveNoteLine(s.leaveFee, s.leaveFeePercent)))
     const next = h('div', 'next-level')
     next.append(h('div', 'next-level-title', nextLevelTitle(s.levelInfo)), h('div', 'level-profile', levelFullProfileLine(s.levelInfo)), h('div', 'level-profile level-maxwin', maxWinLine(s.levelInfo)))
     card.append(next)
     card.append(h('div', 'card-sub checkpoint-note', nextTargetLine(s)))
     centered(card)
     actions.classList.add('actions-col')
-    actions.append(button('btn-cash btn-big btn-flat', leaveLabel(s.bankroll), doLeave, !s.canLeave))
+    actions.append(h('div', 'leave-fee-line', leaveFeeLine(s.leaveFee, s.leaveFeePercent)))
+    actions.append(button('btn-cash btn-big btn-flat', leaveLabel(s.bankroll, s.leaveFee), doLeave, !s.canLeave))
     actions.append(button('btn-primary btn-big', continueLabel(s.stage), doContinue))
     const quiet = suppressFx
     if (!quiet) {
@@ -941,7 +943,7 @@ export function startApp(root: HTMLElement, deps: AppDeps = {}): () => void {
     const card = h('div', 'card card-over')
     card.append(h('div', 'run-badge', 'RUN OVER'))
     card.append(h('h2', 'card-title ' + (net >= 0 ? 'outcome-won' : 'outcome-lost'), gameOverTitle(s.gameOverReason)))
-    card.append(h('div', 'card-sub reason', gameOverText(s.gameOverReason, s.lastCheckpoint, s.cashOut, s.cashOutFee, s.failedCheckpointFeePercent, s.lastResult)))
+    card.append(h('div', 'card-sub reason', gameOverText(s.gameOverReason, s.lastCheckpoint, s.cashOut, s.cashOutFee, s.gameOverReason === 'left' ? s.leaveFeePercent : s.failedCheckpointFeePercent, s.lastResult)))
     const rows = h('div', 'rows rows-compact')
     for (const r of returnRows(s)) rows.append(row(r.label, r.value, r.tone))
     rows.append(row('Wallet now', walletLine(wallet.balance())))

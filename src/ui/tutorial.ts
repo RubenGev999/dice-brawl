@@ -88,7 +88,7 @@ export const STEPS: ReadonlyArray<StepDef> = [
     text: (c) => {
       const s = c.state
       if (!s) return ''
-      return `Beat ${s.fightsPerStage - 1} enemies and then a boss to clear the level, reach ${formatCoins(s.target)} coins or ${s.failedCheckpointFeePercent}% is withheld, then leave with your coins or push on to a harder, richer level.`
+      return `Beat ${s.fightsPerStage - 1} enemies and then a boss to clear the level, reach ${formatCoins(s.target)} coins or ${s.failedCheckpointFeePercent}% is withheld, then leave (a ${s.leaveFeePercent}% fee applies) or push on to a harder, richer level.`
     },
   },
 ]

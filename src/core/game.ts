@@ -77,6 +77,11 @@ export function failedCheckpointFee(bankroll: number): number {
   return b - Math.floor((b * (100 - CONFIG.failedCheckpointFeePercent)) / 100)
 }
 
+export function leaveFee(bankroll: number): number {
+  const b = Math.max(0, Math.floor(bankroll))
+  return b - Math.floor((b * (100 - CONFIG.leaveFeePercent)) / 100)
+}
+
 export function minBetFor(bankroll: number): number {
   return Math.max(1, Math.ceil((bankroll * CONFIG.minBetPercent) / 100))
 }
@@ -213,7 +218,8 @@ class GameImpl implements Game {
       }
       case 'leave': {
         if (s.phase !== 'checkpoint') return false
-        this.endRun('left', s.bankroll, 0)
+        const fee = leaveFee(s.bankroll)
+        this.endRun('left', s.bankroll - fee, fee)
         return true
       }
       case 'pickUpgrade': {
@@ -426,6 +432,8 @@ class GameImpl implements Game {
       upgrades: s.upgrades.map((id) => getUpgrade(id)),
       shopOffers: offers,
       canLeave: s.phase === 'checkpoint',
+      leaveFeePercent: CONFIG.leaveFeePercent,
+      leaveFee: s.phase === 'checkpoint' ? leaveFee(s.bankroll) : 0,
       lastResult: s.lastResult,
       lastCheckpoint: s.lastCheckpoint,
       gameOverReason: s.gameOverReason,
